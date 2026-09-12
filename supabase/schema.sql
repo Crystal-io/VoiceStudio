@@ -159,17 +159,26 @@ create index if not exists sessions_teacher_date_idx on public.sessions(teacher_
 create index if not exists sessions_room_date_idx    on public.sessions(room_id, date);
 
 -- Посещаемость: статус ученика на конкретном занятии.
+-- Оплата хранится здесь же (каждый ребёнок платит за своё занятие):
+--   is_paid — факт оплаты (показываем в интерфейсе);
+--   amount  — сумма (храним, но в MVP скрыта в интерфейсе — финансы прячем).
 create table if not exists public.attendance (
   session_id  uuid not null references public.sessions(id) on delete cascade,
   student_id  uuid not null references public.students(id) on delete cascade,
   studio_id   uuid not null references public.studios(id) on delete cascade,
   status      text not null default 'present'
                 check (status in ('present','absent','late','excused')),
+  is_paid     boolean not null default false,
+  amount      numeric(10,2),
   marked_by   uuid references public.profiles(id) on delete set null,
   marked_at   timestamptz not null default now(),
   primary key (session_id, student_id)
 );
 create index if not exists attendance_student_idx on public.attendance(student_id);
+
+-- На случай, если таблица attendance уже была создана ранее без полей оплаты:
+alter table public.attendance add column if not exists is_paid boolean not null default false;
+alter table public.attendance add column if not exists amount  numeric(10,2);
 
 -- ---------------------------------------------------------------------------
 -- RLS: включаем на всех таблицах и описываем политики
