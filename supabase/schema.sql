@@ -66,6 +66,20 @@ create table if not exists public.profiles (
 );
 create index if not exists profiles_studio_idx on public.profiles(studio_id);
 
+-- Приглашения: директор заранее заводит педагога (email + имя + роль).
+-- При первом входе педагога триггер превратит приглашение в профиль.
+create table if not exists public.invitations (
+  id          uuid primary key default gen_random_uuid(),
+  studio_id   uuid not null references public.studios(id) on delete cascade,
+  email       text not null,
+  full_name   text not null,
+  role        text not null default 'teacher' check (role in ('teacher','director')),
+  created_at  timestamptz not null default now()
+);
+create unique index if not exists invitations_studio_email_uidx
+  on public.invitations(studio_id, lower(email));
+create index if not exists invitations_email_idx on public.invitations(lower(email));
+
 -- Кабинеты
 create table if not exists public.rooms (
   id          uuid primary key default gen_random_uuid(),
@@ -186,6 +200,7 @@ alter table public.attendance add column if not exists amount  numeric(10,2);
 
 alter table public.studios       enable row level security;
 alter table public.profiles      enable row level security;
+alter table public.invitations   enable row level security;
 alter table public.rooms         enable row level security;
 alter table public.students      enable row level security;
 alter table public.groups        enable row level security;
@@ -221,6 +236,13 @@ create policy profiles_update_self on public.profiles
 
 drop policy if exists profiles_admin_write on public.profiles;
 create policy profiles_admin_write on public.profiles
+  for all to authenticated
+  using (studio_id = public.current_studio_id() and public.is_director())
+  with check (studio_id = public.current_studio_id() and public.is_director());
+
+-- invitations: видит и управляет только директор своей студии.
+drop policy if exists invitations_admin_all on public.invitations;
+create policy invitations_admin_all on public.invitations
   for all to authenticated
   using (studio_id = public.current_studio_id() and public.is_director())
   with check (studio_id = public.current_studio_id() and public.is_director());
@@ -325,3 +347,40 @@ create policy attendance_write on public.attendance
       )
     )
   );
+
+-- ---------------------------------------------------------------------------
+-- Авто-привязка профиля при первом входе.
+-- Когда появляется новый пользователь Auth, ищем приглашение по его email
+-- и превращаем его в профиль (студия, имя, роль). Приглашение удаляем.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  inv public.invitations%rowtype;
+begin
+  select * into inv
+  from public.invitations
+  where lower(email) = lower(new.email)
+  limit 1;
+
+  if found then
+    insert into public.profiles (id, studio_id, full_name, role)
+    values (new.id, inv.studio_id, inv.full_name, inv.role)
+    on conflict (id) do nothing;
+
+    delete from public.invitations where id = inv.id;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
