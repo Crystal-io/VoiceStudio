@@ -388,3 +388,55 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+-- ---------------------------------------------------------------------------
+-- Привязка приглашения «по требованию».
+-- Триггер handle_new_user срабатывает лишь при СОЗДАНИИ auth-пользователя.
+-- Если педагог впервые вошёл ДО того, как его пригласили (или порядок иной),
+-- профиль не создастся и повторные входы триггер не запустят. Эта функция
+-- вызывается приложением после входа, когда у пользователя ещё нет профиля:
+-- она находит приглашение по email и создаёт профиль — когда бы аккаунт ни
+-- появился. Безопасна к повторным вызовам (если профиль уже есть — выходит).
+-- ---------------------------------------------------------------------------
+
+create or replace function public.claim_invitation()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  em  text;
+  inv public.invitations%rowtype;
+begin
+  if uid is null then
+    return;
+  end if;
+
+  -- профиль уже есть — ничего не делаем
+  if exists (select 1 from public.profiles where id = uid) then
+    return;
+  end if;
+
+  select lower(u.email) into em from auth.users u where u.id = uid;
+  if em is null then
+    return;
+  end if;
+
+  select * into inv
+  from public.invitations
+  where lower(email) = em
+  limit 1;
+
+  if found then
+    insert into public.profiles (id, studio_id, full_name, role)
+    values (uid, inv.studio_id, inv.full_name, inv.role)
+    on conflict (id) do nothing;
+
+    delete from public.invitations where id = inv.id;
+  end if;
+end;
+$$;
+
+grant execute on function public.claim_invitation() to authenticated;

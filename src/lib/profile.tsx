@@ -31,11 +31,26 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       return
     }
     setLoading(true)
-    const { data } = await supabase
+    const columns = 'id, studio_id, full_name, role, color, is_active, created_at'
+    let { data } = await supabase
       .from('profiles')
-      .select('id, studio_id, full_name, role, color, is_active, created_at')
+      .select(columns)
       .eq('id', user.id)
       .maybeSingle()
+
+    // Профиля нет: возможно, есть приглашение по email, которое ещё не
+    // превратилось в профиль (напр. аккаунт создан раньше приглашения).
+    // Пробуем привязать его на месте и перечитываем.
+    if (!data) {
+      await supabase.rpc('claim_invitation')
+      const retry = await supabase
+        .from('profiles')
+        .select(columns)
+        .eq('id', user.id)
+        .maybeSingle()
+      data = retry.data
+    }
+
     setProfile((data as Profile) ?? null)
     setLoading(false)
   }
