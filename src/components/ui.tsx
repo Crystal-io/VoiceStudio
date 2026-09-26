@@ -3,8 +3,9 @@ import {
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
+  type TextareaHTMLAttributes,
 } from 'react'
-import { CloseIcon } from '@/components/icons'
+import { CloseIcon, SearchIcon } from '@/components/icons'
 
 // ---------------------------------------------------------------------------
 // Кнопка
@@ -59,6 +60,101 @@ export function Field({
         </span>
       )}
     </label>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Многострочное поле с подписью
+// ---------------------------------------------------------------------------
+
+export function TextArea({
+  label,
+  className = '',
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
+        {label}
+      </span>
+      <textarea
+        rows={3}
+        className={`w-full resize-none rounded-xl border border-slate-300 bg-white px-4 py-3 text-base outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 dark:border-slate-700 dark:bg-slate-950 ${className}`}
+        {...props}
+      />
+    </label>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Поиск (поле с лупой)
+// ---------------------------------------------------------------------------
+
+export function SearchField({
+  value,
+  onChange,
+  placeholder = 'Поиск',
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+}) {
+  return (
+    <div className="relative">
+      <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-11 pr-4 text-base outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 dark:border-slate-800 dark:bg-slate-900"
+      />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Переключатель вкладок
+// ---------------------------------------------------------------------------
+
+export function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T
+  options: { value: T; label: string }[]
+  onChange: (value: T) => void
+}) {
+  return (
+    <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800/70">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
+            o.value === value
+              ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white'
+              : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Метка-бейдж («архив», «отключён» и т.п.)
+// ---------------------------------------------------------------------------
+
+export function Badge({ children }: { children: ReactNode }) {
+  return (
+    <span className="ml-2 rounded-md bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+      {children}
+    </span>
   )
 }
 
@@ -163,7 +259,7 @@ export function Modal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl dark:bg-slate-900"
+        className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-xl sm:rounded-3xl dark:bg-slate-900"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">

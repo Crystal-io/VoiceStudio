@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useProfile } from '@/lib/profile'
+import { initials } from '@/lib/format'
 import type { Invitation, Profile } from '@/lib/types'
 import {
   Button,
@@ -241,13 +242,4 @@ function AddTeacherModal({
       </form>
     </Modal>
   )
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join('')
 }

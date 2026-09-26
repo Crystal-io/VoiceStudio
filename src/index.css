@@ -12,8 +12,14 @@
   --color-brand-700: #4338ca;
   --color-brand-800: #3730a3;
   --color-brand-900: #312e81;
+  --color-brand-950: #1e1b4b;
 
   --font-sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Системные контролы (выбор даты и т.п.) — в тон светлой/тёмной теме. */
+:root {
+  color-scheme: light dark;
 }
 
 html,

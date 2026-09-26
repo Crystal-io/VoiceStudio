@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useProfile } from '@/lib/profile'
 import { Card, Spinner } from '@/components/ui'
-import { DoorIcon, UsersIcon } from '@/components/icons'
+import { DoorIcon, MusicIcon, UsersIcon } from '@/components/icons'
 
 export function HomePage() {
   const { profile } = useProfile()
@@ -16,11 +16,13 @@ function DirectorHome() {
     teachers: number
     invites: number
     rooms: number
+    students: number
+    groups: number
   } | null>(null)
 
   useEffect(() => {
     async function load() {
-      const [teachers, invites, rooms] = await Promise.all([
+      const [teachers, invites, rooms, students, groups] = await Promise.all([
         supabase
           .from('profiles')
           .select('id', { count: 'exact', head: true })
@@ -29,11 +31,21 @@ function DirectorHome() {
           .from('invitations')
           .select('id', { count: 'exact', head: true }),
         supabase.from('rooms').select('id', { count: 'exact', head: true }),
+        supabase
+          .from('students')
+          .select('id', { count: 'exact', head: true })
+          .eq('is_active', true),
+        supabase
+          .from('groups')
+          .select('id', { count: 'exact', head: true })
+          .eq('is_active', true),
       ])
       setCounts({
         teachers: teachers.count ?? 0,
         invites: invites.count ?? 0,
         rooms: rooms.count ?? 0,
+        students: students.count ?? 0,
+        groups: groups.count ?? 0,
       })
     }
     void load()
@@ -44,8 +56,8 @@ function DirectorHome() {
       <div>
         <h2 className="text-xl font-semibold">Обзор студии</h2>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Наполните студию людьми и кабинетами — дальше добавим учеников и
-          расписание.
+          Педагоги, кабинеты, ученики и группы — всё, из чего дальше
+          складывается расписание.
         </p>
       </div>
 
@@ -55,6 +67,18 @@ function DirectorHome() {
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-3">
+          <StatLink
+            to="/students"
+            icon={<MusicIcon className="size-5" />}
+            value={counts.students}
+            label="учеников"
+          />
+          <StatLink
+            to="/students?tab=groups"
+            icon={<UsersIcon className="size-5" />}
+            value={counts.groups}
+            label="групп"
+          />
           <StatLink
             to="/teachers"
             icon={<UsersIcon className="size-5" />}

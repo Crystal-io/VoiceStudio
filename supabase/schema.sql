@@ -107,14 +107,19 @@ create table if not exists public.students (
 );
 create index if not exists students_studio_idx on public.students(studio_id);
 
--- Группы (для групповых занятий)
+-- Группы (для групповых занятий). Не удаляются, а уходят в архив
+-- (is_active = false): удаление стёрло бы каскадом их занятия и посещаемость.
 create table if not exists public.groups (
   id          uuid primary key default gen_random_uuid(),
   studio_id   uuid not null references public.studios(id) on delete cascade,
   name        text not null,
+  is_active   boolean not null default true,
   created_at  timestamptz not null default now()
 );
 create index if not exists groups_studio_idx on public.groups(studio_id);
+
+-- M2: архив групп (для баз, созданных до появления поля)
+alter table public.groups add column if not exists is_active boolean not null default true;
 
 -- Состав групп (многие-ко-многим ученик ↔ группа)
 create table if not exists public.group_members (
