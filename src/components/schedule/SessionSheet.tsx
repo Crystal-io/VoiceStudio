@@ -1,11 +1,13 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
-import type { LessonSeries, Session } from '@/lib/types'
-import { formatDayLong, formatDayMonth, hhmm, timeRange, WEEKDAYS_EVERY } from '@/lib/dates'
+import type { Attendance, AttendanceStatus, LessonSeries, Session } from '@/lib/types'
+import { formatDayLong, formatDayMonth, hhmm, timeRange, todayISO, WEEKDAYS_EVERY } from '@/lib/dates'
+import { attendanceColumns, rosterOf } from '@/lib/attendance'
 import { findPhone } from '@/lib/format'
 import { lessonTitle, seriesColumns, teacherColor } from '@/lib/schedule'
-import { Button, ErrorNote, Modal } from '@/components/ui'
+import { Button, ErrorNote, Modal, Spinner } from '@/components/ui'
+import { AttendanceList } from '@/components/schedule/AttendanceList'
 import {
   CalendarIcon,
   ClockIcon,
@@ -13,7 +15,6 @@ import {
   PhoneIcon,
   RepeatIcon,
   UserIcon,
-  UsersIcon,
 } from '@/components/icons'
 
 type Confirm = 'delete' | 'stop' | null
@@ -25,6 +26,7 @@ export function SessionSheet({
   canEdit,
   onClose,
   onChanged,
+  onAttendanceChanged,
   onMove,
   onEditSeries,
 }: {
@@ -34,10 +36,13 @@ export function SessionSheet({
   onClose: () => void
   /** занятие изменилось или удалено — перечитать список */
   onChanged: () => void
+  /** отметки посещаемости/оплаты изменились (список обновим при закрытии) */
+  onAttendanceChanged: () => void
   onMove: () => void
   onEditSeries: (series: LessonSeries) => void
 }) {
   const [series, setSeries] = useState<LessonSeries | null>(null)
+  const [rows, setRows] = useState<Attendance[] | null>(null)
   const [confirm, setConfirm] = useState<Confirm>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -58,20 +63,79 @@ export function SessionSheet({
     }
   }, [session.series_id])
 
+  useEffect(() => {
+    let alive = true
+    void supabase
+      .from('attendance')
+      .select(attendanceColumns)
+      .eq('session_id', session.id)
+      .then(({ data, error }) => {
+        if (!alive) return
+        setRows((data as Attendance[]) ?? [])
+        if (error) setError(error.message)
+      })
+    return () => {
+      alive = false
+    }
+  }, [session.id])
+
   const teacher = dir.profileById.get(session.teacher_id)
   const room = session.room_id ? dir.roomById.get(session.room_id)?.name : null
   const cancelled = session.status === 'cancelled'
+  // «проведено» база ставит сама по отметкам — здесь повторяем это локально
+  const done = rows ? rows.some((r) => r.status) : session.status === 'done'
   const moved = !!session.occurrence_date && session.occurrence_date !== session.date
   const student = session.student_id ? dir.studentById.get(session.student_id) : null
   const phone = findPhone(student?.parent_contact ?? null)
-  const members =
-    session.type === 'group'
-      ? (dir.membersByGroup.get(session.group_id ?? '') ?? [])
-          .map((id) => dir.studentById.get(id))
-          .filter((s) => s && s.is_active)
-          .map((s) => s!.full_name)
-          .sort((a, b) => a.localeCompare(b, 'ru'))
-      : []
+  const roster = rosterOf(session, dir, rows ?? [])
+
+  /** Сохранить отметку ученика. Пустая строка (без статуса и оплаты) удаляется. */
+  async function saveRows(studentIds: string[], patch: Partial<Pick<Attendance, 'status' | 'is_paid'>>) {
+    const prev = rows ?? []
+    const next = studentIds.map((student_id) => ({
+      session_id: session.id,
+      student_id,
+      status: null,
+      is_paid: false,
+      ...prev.find((r) => r.student_id === student_id),
+      ...patch,
+    }))
+    const keep = next.filter((r) => r.status || r.is_paid)
+    const drop = next.filter((r) => !r.status && !r.is_paid).map((r) => r.student_id)
+    setRows([...prev.filter((r) => !studentIds.includes(r.student_id)), ...keep])
+    setError(null)
+
+    const results = await Promise.all([
+      keep.length > 0
+        ? supabase.from('attendance').upsert(
+            keep.map((r) => ({ ...r, studio_id: session.studio_id })),
+            { onConflict: 'session_id,student_id' },
+          )
+        : null,
+      drop.length > 0
+        ? supabase
+            .from('attendance')
+            .delete()
+            .eq('session_id', session.id)
+            .in('student_id', drop)
+        : null,
+    ])
+    const failed = results.find((r) => r?.error)?.error
+    if (failed) {
+      setRows(prev)
+      setError(failed.message)
+      return
+    }
+    onAttendanceChanged()
+  }
+
+  const setStatus = (id: string, status: AttendanceStatus | null) => void saveRows([id], { status })
+  const setPaid = (id: string, is_paid: boolean) => void saveRows([id], { is_paid })
+  const allPresent = () =>
+    void saveRows(
+      roster.filter((s) => !rows?.find((r) => r.student_id === s.id)?.status).map((s) => s.id),
+      { status: 'present' },
+    )
 
   async function run(action: () => PromiseLike<{ error: { message: string } | null }>) {
     setError(null)
@@ -101,7 +165,7 @@ export function SessionSheet({
       .select('session_id', { count: 'exact', head: true })
       .eq('session_id', session.id)
     if (count) {
-      setError('На занятии уже отмечена посещаемость — его можно только отменить.')
+      setError('На занятии уже есть отметки посещения или оплаты — его можно только отменить.')
       setConfirm(null)
       return
     }
@@ -153,11 +217,7 @@ export function SessionSheet({
                 ? seriesText(series)
                 : 'Повторяющееся занятие'}
           </InfoRow>
-          {session.type === 'group' ? (
-            <InfoRow icon={<UsersIcon className="size-5" />}>
-              {members.length > 0 ? members.join(', ') : 'В группе пока никого'}
-            </InfoRow>
-          ) : (
+          {session.type === 'individual' &&
             student?.parent_contact && (
               <InfoRow icon={<UserIcon className="size-5" />}>
                 {student.parent_contact}
@@ -171,9 +231,25 @@ export function SessionSheet({
                   </a>
                 )}
               </InfoRow>
-            )
-          )}
+            )}
         </ul>
+
+        {!cancelled &&
+          (rows ? (
+            <AttendanceList
+              roster={roster}
+              rows={rows}
+              canMarkStatus={canEdit && session.date <= todayISO()}
+              canTogglePaid={canEdit}
+              onStatus={setStatus}
+              onPaid={setPaid}
+              onAllPresent={allPresent}
+            />
+          ) : (
+            <div className="flex justify-center py-4">
+              <Spinner />
+            </div>
+          ))}
 
         {error && <ErrorNote text={error} />}
 
@@ -215,7 +291,7 @@ export function SessionSheet({
                 Изменить расписание серии
               </Button>
             )}
-            {session.status !== 'done' && (
+            {!done && (
               <Button variant={cancelled ? 'ghost' : 'danger'} disabled={busy} onClick={toggleCancelled}>
                 {cancelled ? 'Вернуть занятие' : 'Отменить занятие'}
               </Button>

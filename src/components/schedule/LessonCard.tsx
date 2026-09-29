@@ -1,18 +1,21 @@
 import type { Directory } from '@/lib/directory'
-import type { Session } from '@/lib/types'
+import type { Attendance, Session } from '@/lib/types'
 import { fromMinutes, hhmm, toMinutes } from '@/lib/dates'
 import { lessonTitle, teacherColor } from '@/lib/schedule'
+import { attendanceSummary, isUnmarked } from '@/lib/attendance'
 import { UsersIcon } from '@/components/icons'
 
-/** Карточка занятия в списке: время, кого учим, кабинет, педагог. */
+/** Карточка занятия в списке: время, кого учим, кабинет, педагог, отметки. */
 export function LessonCard({
   session,
   dir,
+  attendance = [],
   showTeacher,
   onClick,
 }: {
   session: Session
   dir: Directory
+  attendance?: Attendance[]
   showTeacher: boolean
   onClick: () => void
 }) {
@@ -26,6 +29,15 @@ export function LessonCard({
           (id) => dir.studentById.get(id)?.is_active,
         ).length
       : null
+
+  const summary = attendanceSummary(session, dir, attendance)
+  const badge = cancelled
+    ? { text: 'отменено', cls: 'bg-rose-50 text-rose-600 dark:bg-rose-950/50 dark:text-rose-300' }
+    : isUnmarked(session)
+      ? { text: 'не отмечено', cls: 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' }
+      : moved && session.status !== 'done'
+        ? { text: 'перенесено', cls: 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' }
+        : null
 
   const details = [room ?? 'Без кабинета', showTeacher ? teacher?.full_name : null]
     .filter(Boolean)
@@ -61,16 +73,23 @@ export function LessonCard({
           )}
         </p>
         <p className="truncate text-sm text-slate-500 dark:text-slate-400">{details}</p>
+        {summary && (
+          <p
+            className={`truncate text-xs font-medium ${
+              summary.tone === 'ok'
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : summary.tone === 'warn'
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : 'text-slate-500 dark:text-slate-400'
+            }`}
+          >
+            {summary.text}
+          </p>
+        )}
       </div>
-      {(cancelled || moved) && (
-        <span
-          className={`self-start rounded-md px-1.5 py-0.5 text-xs font-medium ${
-            cancelled
-              ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/50 dark:text-rose-300'
-              : 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
-          }`}
-        >
-          {cancelled ? 'отменено' : 'перенесено'}
+      {badge && (
+        <span className={`self-start rounded-md px-1.5 py-0.5 text-xs font-medium ${badge.cls}`}>
+          {badge.text}
         </span>
       )}
     </button>

@@ -189,7 +189,7 @@ create table if not exists public.attendance (
   session_id  uuid not null references public.sessions(id) on delete cascade,
   student_id  uuid not null references public.students(id) on delete cascade,
   studio_id   uuid not null references public.studios(id) on delete cascade,
-  status      text not null default 'present'
+  status      text                        -- пусто = ещё не отмечен (см. M4)
                 check (status in ('present','absent','late','excused')),
   is_paid     boolean not null default false,
   amount      numeric(10,2),
@@ -762,3 +762,67 @@ begin
   end loop;
 end;
 $$;
+
+-- ============================================================================
+-- M4: Посещаемость и оплата
+--  * строка attendance = ребёнок × занятие: статус посещения и флаг оплаты;
+--  * статус может быть пустым — оплату отмечают и отдельно (например, заранее);
+--  * занятие становится «проведено» (done), как только у кого-то отмечен
+--    статус, и возвращается в «запланировано», если отметки сняли.
+-- ============================================================================
+
+alter table public.attendance alter column status drop not null;
+alter table public.attendance alter column status drop default;
+
+-- Перед записью: студия — из занятия, ученик — из той же студии,
+-- кто и когда отметил — текущий пользователь и время.
+create or replace function public.attendance_before_write()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.studio_id := (select studio_id from public.sessions where id = new.session_id);
+  if new.studio_id is null then
+    raise exception 'Занятие не найдено';
+  end if;
+  if not exists (select 1 from public.students
+                 where id = new.student_id and studio_id = new.studio_id) then
+    raise exception 'Ученик не из этой студии';
+  end if;
+  new.marked_by := auth.uid();
+  new.marked_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists attendance_before_write on public.attendance;
+create trigger attendance_before_write
+  before insert or update on public.attendance
+  for each row execute function public.attendance_before_write();
+
+-- После записи: статус занятия следует за отметками.
+create or replace function public.attendance_sync_session()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  sid uuid := coalesce(new.session_id, old.session_id);
+begin
+  if exists (select 1 from public.attendance
+             where session_id = sid and status is not null) then
+    update public.sessions set status = 'done'
+    where id = sid and status = 'scheduled';
+  else
+    update public.sessions set status = 'scheduled'
+    where id = sid and status = 'done';
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists attendance_sync_session on public.attendance;
+create trigger attendance_sync_session
+  after insert or update or delete on public.attendance
+  for each row execute function public.attendance_sync_session();

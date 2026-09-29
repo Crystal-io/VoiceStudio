@@ -94,3 +94,13 @@ export type Session = {
   note: string | null
   created_at: string
 }
+
+export type AttendanceStatus = 'present' | 'late' | 'absent' | 'excused'
+
+/** Ребёнок × занятие: посещение (может быть ещё не отмечено) и оплата. */
+export type Attendance = {
+  session_id: string
+  student_id: string
+  status: AttendanceStatus | null
+  is_paid: boolean
+}

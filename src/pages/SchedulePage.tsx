@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useProfile } from '@/lib/profile'
 import { useDirectory } from '@/lib/directory'
-import type { LessonSeries, Session } from '@/lib/types'
+import type { Attendance, Session } from '@/lib/types'
 import {
   addDays,
   formatDayLong,
@@ -15,12 +15,12 @@ import {
   WEEKDAYS_SHORT,
 } from '@/lib/dates'
 import { ensureSessions, loadSessions } from '@/lib/schedule'
+import { loadAttendance } from '@/lib/attendance'
 import { Button, Card, EmptyState, ErrorNote, Segmented, SelectField, Spinner } from '@/components/ui'
 import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } from '@/components/icons'
 import { LessonCard } from '@/components/schedule/LessonCard'
 import { NewLessonModal } from '@/components/schedule/NewLessonModal'
-import { SessionSheet } from '@/components/schedule/SessionSheet'
-import { EditSeriesModal, MoveSessionModal } from '@/components/schedule/EditLessonModals'
+import { LessonDialogs } from '@/components/schedule/LessonDialogs'
 
 type View = 'day' | 'week'
 
@@ -41,13 +41,12 @@ export function SchedulePage() {
   const days = weekDays(weekStart)
 
   const [sessions, setSessions] = useState<Session[] | null>(null)
+  const [attendance, setAttendance] = useState<Map<string, Attendance[]>>(new Map())
   const [loadError, setLoadError] = useState<string | null>(null)
   const [version, setVersion] = useState(0)
 
   const [creating, setCreating] = useState(false)
   const [selected, setSelected] = useState<Session | null>(null)
-  const [moving, setMoving] = useState<Session | null>(null)
-  const [editing, setEditing] = useState<{ series: LessonSeries; from: string } | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -58,9 +57,11 @@ export function SchedulePage() {
         weekEnd,
         teacherFilter === 'all' ? undefined : teacherFilter,
       )
+      const att = await loadAttendance(res.sessions.map((s) => s.id))
       if (!alive) return
       setSessions(res.sessions)
-      setLoadError(ensureError ?? res.error)
+      setAttendance(att.bySession)
+      setLoadError(ensureError ?? res.error ?? att.error)
     })()
     return () => {
       alive = false
@@ -83,8 +84,6 @@ export function SchedulePage() {
 
   function changed(goTo?: string) {
     setSelected(null)
-    setMoving(null)
-    setEditing(null)
     setCreating(false)
     if (goTo) update({ date: goTo })
     setVersion((v) => v + 1)
@@ -97,7 +96,6 @@ export function SchedulePage() {
     byDay.set(s.date, list)
   }
   const showTeacher = isDirector && teacherFilter === 'all'
-  const canEdit = (s: Session) => isDirector || s.teacher_id === profile?.id
 
   const teacherOptions = dir?.profiles.filter((p) => p.is_active) ?? []
 
@@ -108,6 +106,7 @@ export function SchedulePage() {
           key={s.id}
           session={s}
           dir={dir!}
+          attendance={attendance.get(s.id) ?? []}
           showTeacher={showTeacher}
           onClick={() => setSelected(s)}
         />
@@ -276,42 +275,14 @@ export function SchedulePage() {
         />
       )}
 
-      {selected && dir && (
-        <SessionSheet
+      {selected && dir && profile && (
+        <LessonDialogs
+          key={selected.id}
           session={selected}
           dir={dir}
-          canEdit={canEdit(selected)}
+          me={profile}
           onClose={() => setSelected(null)}
-          onChanged={() => changed()}
-          onMove={() => {
-            setMoving(selected)
-            setSelected(null)
-          }}
-          onEditSeries={(series) => {
-            setEditing({ series, from: selected.date })
-            setSelected(null)
-          }}
-        />
-      )}
-
-      {moving && dir && (
-        <MoveSessionModal
-          session={moving}
-          dir={dir}
-          canChangeTeacher={isDirector}
-          onClose={() => setMoving(null)}
-          onDone={changed}
-        />
-      )}
-
-      {editing && dir && (
-        <EditSeriesModal
-          series={editing.series}
-          fromDate={editing.from}
-          dir={dir}
-          canChangeTeacher={isDirector}
-          onClose={() => setEditing(null)}
-          onDone={changed}
+          onChanged={changed}
         />
       )}
     </div>
