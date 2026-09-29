@@ -1,7 +1,8 @@
 # VoiceStage
 
 PWA для музыкальной студии: расписание, кабинеты, посещаемость, нагрузка
-педагогов. План и статус модулей — в [ROADMAP.md](ROADMAP.md).
+педагогов. План и статус модулей — в [ROADMAP.md](ROADMAP.md), подробные итоги
+сделанного — в [docs/PROGRESS.md](docs/PROGRESS.md).
 
 **Прод:** https://voice-studio-ruby.vercel.app
 
