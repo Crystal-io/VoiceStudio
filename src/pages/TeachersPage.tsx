@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useProfile } from '@/lib/profile'
 import { initials } from '@/lib/format'
+import { teacherColor } from '@/lib/schedule'
 import type { Invitation, Profile } from '@/lib/types'
 import {
   Button,
@@ -133,7 +134,7 @@ export function TeachersPage() {
                     <li key={t.id} className="flex items-center gap-3 px-4 py-3">
                       <div
                         className="flex size-9 items-center justify-center rounded-full text-sm font-semibold text-white"
-                        style={{ background: t.color ?? '#4f46e5' }}
+                        style={{ background: teacherColor(t) }}
                       >
                         {initials(t.full_name)}
                       </div>

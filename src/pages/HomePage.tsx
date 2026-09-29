@@ -4,11 +4,12 @@ import { supabase } from '@/lib/supabase'
 import { useProfile } from '@/lib/profile'
 import { Card, Spinner } from '@/components/ui'
 import { DoorIcon, MusicIcon, UsersIcon } from '@/components/icons'
+import { TodayLessons } from '@/components/schedule/TodayLessons'
 
 export function HomePage() {
   const { profile } = useProfile()
   if (profile?.role === 'director') return <DirectorHome />
-  return <TeacherHome name={profile?.full_name} />
+  return <TeacherHome name={profile?.full_name} teacherId={profile?.id} />
 }
 
 function DirectorHome() {
@@ -98,6 +99,8 @@ function DirectorHome() {
           />
         </div>
       )}
+
+      <TodayLessons />
     </div>
   )
 }
@@ -133,7 +136,7 @@ function StatLink({
   )
 }
 
-function TeacherHome({ name }: { name?: string }) {
+function TeacherHome({ name, teacherId }: { name?: string; teacherId?: string }) {
   return (
     <div className="space-y-5">
       <div>
@@ -141,15 +144,10 @@ function TeacherHome({ name }: { name?: string }) {
           Здравствуйте{name ? `, ${name.split(' ')[0]}` : ''} 👋
         </h2>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Вы вошли в VoiceStage.
+          Ваши занятия на сегодня. Всё расписание — во вкладке «Расписание».
         </p>
       </div>
-      <Card className="p-6">
-        <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-300">
-          Ваше расписание и отметка посещаемости появятся здесь в следующих
-          обновлениях. Пока директор настраивает студию.
-        </p>
-      </Card>
+      {teacherId && <TodayLessons teacherId={teacherId} />}
     </div>
   )
 }

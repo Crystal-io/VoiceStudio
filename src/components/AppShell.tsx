@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { useProfile } from '@/lib/profile'
-import { HomeIcon, UsersIcon, DoorIcon, MusicIcon } from '@/components/icons'
+import { HomeIcon, UsersIcon, DoorIcon, MusicIcon, CalendarIcon } from '@/components/icons'
 import type { ComponentType, SVGProps } from 'react'
 
 type NavItem = {
@@ -12,12 +12,16 @@ type NavItem = {
 
 const directorNav: NavItem[] = [
   { to: '/', label: 'Главная', icon: HomeIcon },
+  { to: '/schedule', label: 'Расписание', icon: CalendarIcon },
   { to: '/students', label: 'Ученики', icon: MusicIcon },
   { to: '/teachers', label: 'Педагоги', icon: UsersIcon },
   { to: '/rooms', label: 'Кабинеты', icon: DoorIcon },
 ]
 
-const teacherNav: NavItem[] = [{ to: '/', label: 'Главная', icon: HomeIcon }]
+const teacherNav: NavItem[] = [
+  { to: '/', label: 'Главная', icon: HomeIcon },
+  { to: '/schedule', label: 'Расписание', icon: CalendarIcon },
+]
 
 export function AppShell() {
   const { user, signOut } = useAuth()

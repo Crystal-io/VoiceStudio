@@ -445,3 +445,320 @@ end;
 $$;
 
 grant execute on function public.claim_invitation() to authenticated;
+
+-- ============================================================================
+-- M3: Расписание
+--  * серия (lesson_series) — правило «каждый вторник 15:00»;
+--  * занятия (sessions) создаются из серий заранее, на горизонт вперёд, —
+--    чтобы на них можно было ставить посещаемость, отменять и переносить;
+--  * серию меняют «с такой-то даты»: старая серия заканчивается накануне,
+--    с этой даты действует новая — прошлые занятия и история не трогаются.
+-- ============================================================================
+
+-- Исходная дата вхождения серии. При переносе занятия date меняется, а
+-- occurrence_date — нет: так генератор знает, что это вхождение уже создано.
+alter table public.sessions add column if not exists occurrence_date date;
+create unique index if not exists sessions_series_occurrence_uidx
+  on public.sessions(series_id, occurrence_date) where series_id is not null;
+
+-- Педагог, кабинет, ученик и группа занятия должны быть из той же студии.
+create or replace function public.check_schedule_refs()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if not exists (select 1 from public.profiles
+                 where id = new.teacher_id and studio_id = new.studio_id) then
+    raise exception 'Педагог не из этой студии';
+  end if;
+  if new.room_id is not null and not exists (
+       select 1 from public.rooms where id = new.room_id and studio_id = new.studio_id) then
+    raise exception 'Кабинет не из этой студии';
+  end if;
+  if new.student_id is not null and not exists (
+       select 1 from public.students where id = new.student_id and studio_id = new.studio_id) then
+    raise exception 'Ученик не из этой студии';
+  end if;
+  if new.group_id is not null and not exists (
+       select 1 from public.groups where id = new.group_id and studio_id = new.studio_id) then
+    raise exception 'Группа не из этой студии';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists lesson_series_refs on public.lesson_series;
+create trigger lesson_series_refs
+  before insert or update of studio_id, teacher_id, room_id, student_id, group_id
+  on public.lesson_series
+  for each row execute function public.check_schedule_refs();
+
+drop trigger if exists sessions_refs on public.sessions;
+create trigger sessions_refs
+  before insert or update of studio_id, teacher_id, room_id, student_id, group_id
+  on public.sessions
+  for each row execute function public.check_schedule_refs();
+
+-- Создать занятия одной серии до даты p_until (включительно).
+-- Уже созданные вхождения пропускаются. Возвращает число новых занятий.
+create or replace function public.generate_series_sessions(p_series uuid, p_until date)
+returns int
+language plpgsql
+set search_path = public
+as $$
+declare
+  s public.lesson_series%rowtype;
+  first_day date;
+  last_day date;
+  n int;
+begin
+  select * into s from public.lesson_series where id = p_series;
+  if not found or not s.is_active then
+    return 0;
+  end if;
+  -- первое вхождение: ближайший нужный день недели начиная со start_date
+  first_day := s.start_date
+    + ((s.weekday - (extract(isodow from s.start_date)::int - 1) + 7) % 7);
+  last_day := least(coalesce(s.end_date, p_until), p_until);
+
+  insert into public.sessions (
+    studio_id, series_id, teacher_id, room_id, type, student_id, group_id,
+    date, occurrence_date, start_time, duration_min
+  )
+  select s.studio_id, s.id, s.teacher_id, s.room_id, s.type, s.student_id, s.group_id,
+         d::date, d::date, s.start_time, s.duration_min
+  from generate_series(first_day::timestamp, last_day::timestamp, interval '7 days') d
+  on conflict (series_id, occurrence_date) where series_id is not null do nothing;
+
+  get diagnostics n = row_count;
+  return n;
+end;
+$$;
+
+-- Досоздать занятия всех серий студии до p_until. Вызывается приложением
+-- при открытии расписания. SECURITY DEFINER: педагог, открывший календарь,
+-- создаёт занятия и коллег — но только по уже существующим сериям студии.
+create or replace function public.ensure_sessions(p_until date)
+returns int
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  sid uuid := public.current_studio_id();
+  lim date := least(p_until, current_date + 400);
+  r record;
+  total int := 0;
+begin
+  if sid is null then
+    return 0;
+  end if;
+  for r in
+    select id from public.lesson_series
+    where studio_id = sid and is_active and start_date <= lim
+      and (end_date is null or end_date >= start_date)
+  loop
+    total := total + public.generate_series_sessions(r.id, lim);
+  end loop;
+  return total;
+end;
+$$;
+
+-- Изменить серию начиная с даты p_from. Будущие занятия серии (без отметок
+-- посещаемости) пересоздаются по новым правилам; прошлые остаются как были.
+-- Возвращает id серии, действующей с p_from (новой, если старая уже шла).
+create or replace function public.update_series(
+  p_series   uuid,
+  p_from     date,
+  p_teacher  uuid,
+  p_room     uuid,
+  p_weekday  int,
+  p_start    time,
+  p_duration int,
+  p_end      date,
+  p_until    date
+)
+returns uuid
+language plpgsql
+set search_path = public
+as $$
+declare
+  s public.lesson_series%rowtype;
+  new_id uuid;
+begin
+  select * into s from public.lesson_series where id = p_series;
+  if not found then
+    raise exception 'Серия не найдена';
+  end if;
+  if not (public.is_director() or s.teacher_id = auth.uid()) then
+    raise exception 'Нет прав менять эту серию';
+  end if;
+
+  delete from public.sessions ss
+  where ss.series_id = s.id and ss.date >= p_from
+    and not exists (select 1 from public.attendance a where a.session_id = ss.id);
+
+  if p_from <= s.start_date then
+    -- серия ещё не началась — правим на месте
+    update public.lesson_series
+    set teacher_id = p_teacher, room_id = p_room, weekday = p_weekday,
+        start_time = p_start, duration_min = p_duration, end_date = p_end
+    where id = s.id;
+    new_id := s.id;
+  else
+    -- старая серия заканчивается накануне, с p_from — новая
+    update public.lesson_series set end_date = p_from - 1 where id = s.id;
+    insert into public.lesson_series (
+      studio_id, teacher_id, room_id, type, student_id, group_id,
+      weekday, start_time, duration_min, start_date, end_date
+    ) values (
+      s.studio_id, p_teacher, p_room, s.type, s.student_id, s.group_id,
+      p_weekday, p_start, p_duration, p_from, p_end
+    )
+    returning id into new_id;
+    -- уцелевшие (с отметками) будущие занятия переходят к новой серии
+    update public.sessions set series_id = new_id
+    where series_id = s.id and date >= p_from;
+  end if;
+
+  perform public.generate_series_sessions(new_id, p_until);
+  return new_id;
+end;
+$$;
+
+-- Остановить повторение начиная с p_from: будущие занятия без отметок
+-- удаляются, серия заканчивается накануне. Если от серии ничего не осталось —
+-- удаляется целиком.
+create or replace function public.stop_series(p_series uuid, p_from date)
+returns void
+language plpgsql
+set search_path = public
+as $$
+declare
+  s public.lesson_series%rowtype;
+begin
+  select * into s from public.lesson_series where id = p_series;
+  if not found then
+    raise exception 'Серия не найдена';
+  end if;
+  if not (public.is_director() or s.teacher_id = auth.uid()) then
+    raise exception 'Нет прав менять эту серию';
+  end if;
+
+  delete from public.sessions ss
+  where ss.series_id = s.id and ss.date >= p_from
+    and not exists (select 1 from public.attendance a where a.session_id = ss.id);
+
+  if not exists (select 1 from public.sessions where series_id = s.id) then
+    delete from public.lesson_series where id = s.id;
+  else
+    update public.lesson_series
+    set end_date = greatest(p_from - 1, s.start_date - 1)
+    where id = s.id;
+  end if;
+end;
+$$;
+
+-- Пересечения: занятия студии в даты p_dates, которые идут одновременно с
+-- [p_start, p_start + p_duration) у того же педагога или в том же кабинете.
+-- Отменённые не считаются. p_ignore_* — само редактируемое занятие/серия.
+create or replace function public.schedule_conflicts(
+  p_teacher        uuid,
+  p_room           uuid,
+  p_dates          date[],
+  p_start          time,
+  p_duration       int,
+  p_ignore_series  uuid default null,
+  p_ignore_session uuid default null
+)
+returns setof public.sessions
+language plpgsql
+set search_path = public
+as $$
+declare
+  st int := (extract(epoch from p_start) / 60)::int;
+begin
+  if coalesce(array_length(p_dates, 1), 0) = 0 then
+    return;
+  end if;
+  -- чтобы сравнивать и с ещё не созданными занятиями серий
+  perform public.ensure_sessions((select max(d) from unnest(p_dates) d));
+
+  return query
+  select s.*
+  from public.sessions s
+  where s.studio_id = public.current_studio_id()
+    and s.date = any(p_dates)
+    and s.status <> 'cancelled'
+    and (s.teacher_id = p_teacher or (p_room is not null and s.room_id = p_room))
+    and (extract(epoch from s.start_time) / 60)::int < st + p_duration
+    and st < (extract(epoch from s.start_time) / 60)::int + s.duration_min
+    and (p_ignore_series is null or s.series_id is distinct from p_ignore_series)
+    and (p_ignore_session is null or s.id <> p_ignore_session)
+  order by s.date, s.start_time
+  limit 300;
+end;
+$$;
+
+revoke all on function public.generate_series_sessions(uuid, date) from public, anon;
+revoke all on function public.ensure_sessions(date) from public, anon;
+revoke all on function public.update_series(uuid, date, uuid, uuid, int, time, int, date, date) from public, anon;
+revoke all on function public.stop_series(uuid, date) from public, anon;
+revoke all on function public.schedule_conflicts(uuid, uuid, date[], time, int, uuid, uuid) from public, anon;
+grant execute on function public.generate_series_sessions(uuid, date) to authenticated;
+grant execute on function public.ensure_sessions(date) to authenticated;
+grant execute on function public.update_series(uuid, date, uuid, uuid, int, time, int, date, date) to authenticated;
+grant execute on function public.stop_series(uuid, date) to authenticated;
+grant execute on function public.schedule_conflicts(uuid, uuid, date[], time, int, uuid, uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- M3: цвет педагога в календаре. Новому профилю выдаётся первый свободный
+-- цвет палитры студии — у каждого педагога свой (пока их не больше восьми).
+-- ---------------------------------------------------------------------------
+
+create or replace function public.pick_profile_color(p_studio uuid)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce(
+    (select c from unnest(array['#4f46e5','#0891b2','#db2777','#ea580c',
+                                '#16a34a','#9333ea','#ca8a04','#dc2626'])
+                   with ordinality as t(c, i)
+     where c not in (select color from public.profiles
+                     where studio_id = p_studio and color is not null)
+     order by i limit 1),
+    '#64748b'
+  );
+$$;
+
+create or replace function public.profiles_default_color()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.color is null then
+    new.color := public.pick_profile_color(new.studio_id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_default_color on public.profiles;
+create trigger profiles_default_color
+  before insert on public.profiles
+  for each row execute function public.profiles_default_color();
+
+-- Раскрасить уже существующие профили без цвета (по порядку появления).
+do $$
+declare
+  r record;
+begin
+  for r in select id, studio_id from public.profiles where color is null order by created_at loop
+    update public.profiles set color = public.pick_profile_color(r.studio_id) where id = r.id;
+  end loop;
+end;
+$$;

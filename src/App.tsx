@@ -8,6 +8,7 @@ import { HomePage } from '@/pages/HomePage'
 import { TeachersPage } from '@/pages/TeachersPage'
 import { RoomsPage } from '@/pages/RoomsPage'
 import { StudentsPage } from '@/pages/StudentsPage'
+import { SchedulePage } from '@/pages/SchedulePage'
 import { AppShell } from '@/components/AppShell'
 import { Spinner } from '@/components/ui'
 
@@ -68,6 +69,7 @@ function AppRoutes() {
       <Routes>
         <Route element={<AppShell />}>
           <Route index element={<HomePage />} />
+          <Route path="schedule" element={<SchedulePage />} />
           <Route
             path="teachers"
             element={

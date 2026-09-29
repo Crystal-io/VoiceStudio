@@ -3,9 +3,10 @@ import {
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
+  type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from 'react'
-import { CloseIcon, SearchIcon } from '@/components/icons'
+import { ChevronDownIcon, CloseIcon, SearchIcon } from '@/components/icons'
 
 // ---------------------------------------------------------------------------
 // Кнопка
@@ -82,6 +83,38 @@ export function TextArea({
         className={`w-full resize-none rounded-xl border border-slate-300 bg-white px-4 py-3 text-base outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 dark:border-slate-700 dark:bg-slate-950 ${className}`}
         {...props}
       />
+    </label>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Выпадающий список (нативный — на телефоне открывает системный выбор)
+// ---------------------------------------------------------------------------
+
+export function SelectField({
+  label,
+  className = '',
+  children,
+  ...props
+}: SelectHTMLAttributes<HTMLSelectElement> & { label?: string }) {
+  const select = (
+    <div className="relative">
+      <select
+        className={`w-full appearance-none rounded-xl border border-slate-300 bg-white py-3 pl-4 pr-10 text-base outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30 dark:border-slate-700 dark:bg-slate-950 ${className}`}
+        {...props}
+      >
+        {children}
+      </select>
+      <ChevronDownIcon className="pointer-events-none absolute right-3.5 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
+    </div>
+  )
+  if (!label) return select
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
+        {label}
+      </span>
+      {select}
     </label>
   )
 }
