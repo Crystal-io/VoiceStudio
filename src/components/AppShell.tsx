@@ -2,7 +2,8 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { useProfile } from '@/lib/profile'
 import { HomeIcon, UsersIcon, DoorIcon, MusicIcon, CalendarIcon } from '@/components/icons'
-import type { ComponentType, SVGProps } from 'react'
+import { Suspense, type ComponentType, type SVGProps } from 'react'
+import { Spinner } from '@/components/ui'
 
 type NavItem = {
   to: string
@@ -57,7 +58,15 @@ export function AppShell() {
       </header>
 
       <main className="flex-1 px-5 pb-28 pt-2">
-        <Outlet />
+        <Suspense
+          fallback={
+            <div className="flex justify-center py-16">
+              <Spinner />
+            </div>
+          }
+        >
+          <Outlet />
+        </Suspense>
       </main>
 
       {nav.length > 1 && (

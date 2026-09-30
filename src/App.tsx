@@ -1,17 +1,42 @@
-import type { ReactNode } from 'react'
+import { lazy, type ComponentType, type ReactNode } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { ProfileProvider, useProfile } from '@/lib/profile'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { LoginPage } from '@/pages/LoginPage'
 import { HomePage } from '@/pages/HomePage'
-import { TeachersPage } from '@/pages/TeachersPage'
-import { RoomsPage } from '@/pages/RoomsPage'
-import { StudentsPage } from '@/pages/StudentsPage'
-import { SchedulePage } from '@/pages/SchedulePage'
-import { ReportsPage } from '@/pages/ReportsPage'
 import { AppShell } from '@/components/AppShell'
 import { Spinner } from '@/components/ui'
+
+const RELOAD_KEY = 'vs-chunk-reload'
+
+/**
+ * Раздел, который грузится отдельным файлом при первом открытии.
+ * После нового деплоя у открытой вкладки старые файлы уже не найдутся —
+ * тогда один раз перезагружаем страницу (не чаще раза в 10 секунд).
+ */
+function lazyPage<M>(load: () => Promise<M>, pick: (m: M) => ComponentType) {
+  return lazy(() =>
+    load().then(
+      (m) => ({ default: pick(m) }),
+      (err) => {
+        const last = Number(sessionStorage.getItem(RELOAD_KEY) ?? 0)
+        if (Date.now() - last > 10_000) {
+          sessionStorage.setItem(RELOAD_KEY, String(Date.now()))
+          window.location.reload()
+          return new Promise<never>(() => {})
+        }
+        throw err
+      },
+    ),
+  )
+}
+
+const SchedulePage = lazyPage(() => import('@/pages/SchedulePage'), (m) => m.SchedulePage)
+const ReportsPage = lazyPage(() => import('@/pages/ReportsPage'), (m) => m.ReportsPage)
+const StudentsPage = lazyPage(() => import('@/pages/StudentsPage'), (m) => m.StudentsPage)
+const TeachersPage = lazyPage(() => import('@/pages/TeachersPage'), (m) => m.TeachersPage)
+const RoomsPage = lazyPage(() => import('@/pages/RoomsPage'), (m) => m.RoomsPage)
 
 function Splash() {
   return (
