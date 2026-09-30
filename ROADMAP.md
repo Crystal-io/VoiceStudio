@@ -145,6 +145,13 @@ Gmail — M6) или Google.
     текст с кодом `{{ .Token }}` (первый вход педагога идёт по «Confirm
     signup»: без кода там придёт ссылка вместо цифр). Текст — в README.
   - ⏳ Проверить: код приходит на почту, отличную от директорской.
+- 🔁 Регистрация только по приглашению (`57b492a`): функция
+  `before_user_created` в базе — готово.
+  - ⏳ Директор: Supabase → Authentication → Hooks → «Before User Created» →
+    Postgres → `public.before_user_created` → Save.
+  - ⏳ Директор: удалить постороннего `chandrashekar966359@gmail.com`
+    (Authentication → Users).
+  - ⏳ Проверить: чужая почта получает отказ, приглашённый педагог входит.
 - ⏳ Google-вход: перевести OAuth-приложение из «Testing» в «In production»
   (Google Cloud → Google Auth Platform → Audience → Publish app). Для доступа
   к имени и почте проверка Google не нужна; после этого входит любой
