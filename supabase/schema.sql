@@ -826,3 +826,44 @@ drop trigger if exists attendance_sync_session on public.attendance;
 create trigger attendance_sync_session
   after insert or update or delete on public.attendance
   for each row execute function public.attendance_sync_session();
+
+-- ============================================================================
+-- M6: вход только по приглашению
+-- Без этого учётную запись мог создать кто угодно (Google или код на почту):
+-- данных он не видел (RLS), но аккаунт оставался в базе, а код на почту можно
+-- было слать на любые адреса через почту студии.
+-- Supabase вызывает эту функцию перед созданием КАЖДОГО нового пользователя
+-- (Google, код на почту) — только если она включена в Dashboard:
+-- Authentication → Hooks → «Before User Created» → Postgres → public.before_user_created.
+-- Пропускает, если почта есть в приглашениях (любой студии). Уже существующих
+-- пользователей хук не касается — они входят как раньше.
+-- Первый директор новой студии: создать студию и приглашение с role='director'
+-- (см. bootstrap.sql), затем войти этой почтой.
+-- ============================================================================
+
+create or replace function public.before_user_created(event jsonb)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  em text := lower(trim(event->'user'->>'email'));
+begin
+  if em <> '' and exists (select 1 from public.invitations where lower(email) = em) then
+    return '{}'::jsonb;
+  end if;
+
+  return jsonb_build_object('error', jsonb_build_object(
+    'http_code', 403,
+    'message', 'Этой почты нет в списке студии. Попросите директора добавить вас в «Педагоги» и войдите с той же почтой.'
+  ));
+end;
+$$;
+
+-- Вызывает только служба авторизации Supabase; из приложения — нельзя
+-- (иначе по ответу можно было бы перебирать, чьи почты приглашены).
+revoke execute on function public.before_user_created(jsonb) from public, anon, authenticated;
+grant usage on schema public to supabase_auth_admin;
+grant execute on function public.before_user_created(jsonb) to supabase_auth_admin;

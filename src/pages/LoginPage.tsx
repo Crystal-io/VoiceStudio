@@ -1,5 +1,5 @@
-import { useRef, useState, type FormEvent } from 'react'
-import { supabase } from '@/lib/supabase'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { clearRedirectError, peekRedirectError, supabase } from '@/lib/supabase'
 
 type Step = 'email' | 'code'
 
@@ -9,8 +9,14 @@ export function LoginPage() {
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [googleBusy, setGoogleBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // ошибка входа через Google приходит вместе с возвратом на сайт
+  const [error, setError] = useState<string | null>(() => {
+    const redirected = peekRedirectError()
+    return redirected ? mapError(redirected) : null
+  })
   const codeInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => clearRedirectError(), [])
 
   async function signInWithGoogle() {
     setError(null)
