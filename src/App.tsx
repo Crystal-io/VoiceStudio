@@ -9,6 +9,7 @@ import { TeachersPage } from '@/pages/TeachersPage'
 import { RoomsPage } from '@/pages/RoomsPage'
 import { StudentsPage } from '@/pages/StudentsPage'
 import { SchedulePage } from '@/pages/SchedulePage'
+import { ReportsPage } from '@/pages/ReportsPage'
 import { AppShell } from '@/components/AppShell'
 import { Spinner } from '@/components/ui'
 
@@ -91,6 +92,14 @@ function AppRoutes() {
             element={
               <DirectorOnly>
                 <StudentsPage />
+              </DirectorOnly>
+            }
+          />
+          <Route
+            path="reports"
+            element={
+              <DirectorOnly>
+                <ReportsPage />
               </DirectorOnly>
             }
           />

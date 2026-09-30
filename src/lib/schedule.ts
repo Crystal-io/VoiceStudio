@@ -49,6 +49,25 @@ export async function loadSessions(
   return { sessions: (data as Session[]) ?? [], error: error ? error.message : null }
 }
 
+/** Разбить список на порции — для длинных фильтров `in (...)` в адресе запроса. */
+export function chunks<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+/** Занятия по списку id (порциями). */
+export async function loadSessionsByIds(
+  ids: string[],
+): Promise<{ sessions: Session[]; error: string | null }> {
+  const results = await Promise.all(
+    chunks(ids, 100).map((part) => supabase.from('sessions').select(sessionColumns).in('id', part)),
+  )
+  const sessions = results.flatMap((r) => (r.data as Session[]) ?? [])
+  const error = results.find((r) => r.error)?.error
+  return { sessions, error: error ? error.message : null }
+}
+
 /** Кого учим: имя ученика или название группы. */
 export function lessonTitle(
   s: { type: LessonType; student_id: string | null; group_id: string | null },

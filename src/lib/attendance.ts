@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
 import type { Attendance, AttendanceStatus, Session, Student } from '@/lib/types'
 import { toMinutes, todayISO } from '@/lib/dates'
+import { chunks, loadSessionsByIds } from '@/lib/schedule'
 
 export const attendanceColumns = 'session_id, student_id, status, is_paid'
 
@@ -36,22 +37,54 @@ export const STATUS_TEXT: Record<AttendanceStatus, string> = {
   excused: 'уважительная причина',
 }
 
+/** Пришёл на занятие (в том числе с опозданием). */
+export function came(status: AttendanceStatus | null): boolean {
+  return status === 'present' || status === 'late'
+}
+
 /** Отметки для набора занятий: id занятия → строки посещаемости. */
 export async function loadAttendance(
   sessionIds: string[],
 ): Promise<{ bySession: Map<string, Attendance[]>; error: string | null }> {
   const bySession = new Map<string, Attendance[]>()
-  if (sessionIds.length === 0) return { bySession, error: null }
+  // id занятий уходят в адрес запроса — за месяц их сотни, поэтому порциями
+  const results = await Promise.all(
+    chunks(sessionIds, 100).map((ids) =>
+      supabase.from('attendance').select(attendanceColumns).in('session_id', ids),
+    ),
+  )
+  for (const { data } of results) {
+    for (const row of (data as Attendance[]) ?? []) {
+      const list = bySession.get(row.session_id) ?? []
+      list.push(row)
+      bySession.set(row.session_id, list)
+    }
+  }
+  const error = results.find((r) => r.error)?.error
+  return { bySession, error: error ? error.message : null }
+}
+
+/** Занятие ученика вместе с его отметкой. */
+export type LessonMark = { session: Session; row: Attendance }
+
+/**
+ * Все неоплаченные посещения студии за всё время: ребёнок был на занятии
+ * («есть» или «опоздание»), а оплата не отмечена. Пропуски не в счёт.
+ */
+export async function loadDebts(): Promise<{ debts: LessonMark[]; error: string | null }> {
   const { data, error } = await supabase
     .from('attendance')
     .select(attendanceColumns)
-    .in('session_id', sessionIds)
-  for (const row of (data as Attendance[]) ?? []) {
-    const list = bySession.get(row.session_id) ?? []
-    list.push(row)
-    bySession.set(row.session_id, list)
-  }
-  return { bySession, error: error ? error.message : null }
+    .eq('is_paid', false)
+    .in('status', ['present', 'late'])
+  if (error) return { debts: [], error: error.message }
+  const rows = (data as Attendance[]) ?? []
+  const res = await loadSessionsByIds([...new Set(rows.map((r) => r.session_id))])
+  const byId = new Map(res.sessions.map((s) => [s.id, s]))
+  const debts = rows
+    .map((row) => ({ session: byId.get(row.session_id)!, row }))
+    .filter((d) => d.session && d.session.status !== 'cancelled')
+  return { debts, error: res.error }
 }
 
 /**

@@ -195,3 +195,22 @@ export function UserIcon(props: IconProps) {
     </svg>
   )
 }
+
+export function ChartIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 20h16" />
+      <path d="M7 16v-5M12 16V7M17 16v-8" />
+    </svg>
+  )
+}
+
+export function WalletIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 7a2 2 0 0 1 2-2h11v4" />
+      <path d="M4 7v11a2 2 0 0 0 2 2h13a1 1 0 0 0 1-1V10a1 1 0 0 0-1-1H6a2 2 0 0 1-2-2Z" />
+      <path d="M16 14.5h.01" />
+    </svg>
+  )
+}

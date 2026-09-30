@@ -21,12 +21,17 @@ export function NewLessonModal({
   dir,
   me,
   defaultDate,
+  defaultStart,
+  defaultRoomId,
   onClose,
   onDone,
 }: {
   dir: Directory
   me: Profile
   defaultDate: string
+  /** из сетки кабинетов: время и кабинет, куда нажали */
+  defaultStart?: string
+  defaultRoomId?: string | null
   onClose: () => void
   onDone: (date: string) => void
 }) {
@@ -39,13 +44,13 @@ export function NewLessonModal({
   const [teacherId, setTeacherId] = useState(
     !isDirector ? me.id : activeTeachers.length === 1 ? activeTeachers[0].id : '',
   )
-  const [roomId, setRoomId] = useState('')
+  const [roomId, setRoomId] = useState(defaultRoomId ?? '')
   const [repeat, setRepeat] = useState<Repeat>('weekly')
   const [date, setDate] = useState(defaultDate)
   // null — день недели следует за датой начала, пока его не выбрали вручную
   const [pickedWeekdays, setPickedWeekdays] = useState<number[] | null>(null)
   const [endDate, setEndDate] = useState('')
-  const [start, setStart] = useState('15:00')
+  const [start, setStart] = useState(defaultStart ?? '15:00')
   const [duration, setDuration] = useState(45)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)

@@ -21,8 +21,10 @@ import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } from '@/com
 import { LessonCard } from '@/components/schedule/LessonCard'
 import { NewLessonModal } from '@/components/schedule/NewLessonModal'
 import { LessonDialogs } from '@/components/schedule/LessonDialogs'
+import { RoomGrid } from '@/components/schedule/RoomGrid'
 
-type View = 'day' | 'week'
+/** rooms — сетка «кабинет × время» за день (только у директора). */
+type View = 'day' | 'week' | 'rooms'
 
 export function SchedulePage() {
   const { profile } = useProfile()
@@ -32,9 +34,13 @@ export function SchedulePage() {
   const isDirector = profile?.role === 'director'
   const today = todayISO()
   const date = isISODate(params.get('date')) ? params.get('date')! : today
-  const view: View = params.get('view') === 'week' ? 'week' : 'day'
+  const viewParam = params.get('view')
+  const view: View =
+    viewParam === 'week' ? 'week' : viewParam === 'rooms' && isDirector ? 'rooms' : 'day'
   // педагог видит только свои занятия; директор — всех или выбранного
   const teacherFilter = isDirector ? (params.get('teacher') ?? 'all') : (profile?.id ?? '')
+  // сетке кабинетов нужны занятия всех педагогов
+  const loadTeacher = view === 'rooms' || teacherFilter === 'all' ? undefined : teacherFilter
 
   const weekStart = startOfWeek(date)
   const weekEnd = addDays(weekStart, 6)
@@ -45,18 +51,17 @@ export function SchedulePage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [version, setVersion] = useState(0)
 
-  const [creating, setCreating] = useState(false)
+  /** открыта форма нового занятия; из сетки — с кабинетом и временем */
+  const [creating, setCreating] = useState<{ start?: string; roomId?: string | null } | null>(
+    null,
+  )
   const [selected, setSelected] = useState<Session | null>(null)
 
   useEffect(() => {
     let alive = true
     void (async () => {
       const ensureError = await ensureSessions(weekEnd)
-      const res = await loadSessions(
-        weekStart,
-        weekEnd,
-        teacherFilter === 'all' ? undefined : teacherFilter,
-      )
+      const res = await loadSessions(weekStart, weekEnd, loadTeacher)
       const att = await loadAttendance(res.sessions.map((s) => s.id))
       if (!alive) return
       setSessions(res.sessions)
@@ -66,14 +71,14 @@ export function SchedulePage() {
     return () => {
       alive = false
     }
-  }, [weekStart, weekEnd, teacherFilter, version])
+  }, [weekStart, weekEnd, loadTeacher, version])
 
   function update(next: { date?: string; view?: View; teacher?: string }) {
     const p = new URLSearchParams(params)
     if (next.date !== undefined) p.set('date', next.date)
     if (next.view !== undefined) {
-      if (next.view === 'week') p.set('view', 'week')
-      else p.delete('view')
+      if (next.view === 'day') p.delete('view')
+      else p.set('view', next.view)
     }
     if (next.teacher !== undefined) {
       if (next.teacher === 'all') p.delete('teacher')
@@ -84,7 +89,7 @@ export function SchedulePage() {
 
   function changed(goTo?: string) {
     setSelected(null)
-    setCreating(false)
+    setCreating(null)
     if (goTo) update({ date: goTo })
     setVersion((v) => v + 1)
   }
@@ -123,7 +128,7 @@ export function SchedulePage() {
             {isDirector ? 'Все занятия студии.' : 'Ваши занятия.'}
           </p>
         </div>
-        <Button onClick={() => setCreating(true)} disabled={!dir} className="shrink-0">
+        <Button onClick={() => setCreating({})} disabled={!dir} className="shrink-0">
           <PlusIcon className="size-5" />
           Добавить
         </Button>
@@ -154,12 +159,12 @@ export function SchedulePage() {
         <div className="mt-2 grid grid-cols-7 gap-1">
           {days.map((d, i) => {
             const count = (byDay.get(d) ?? []).filter((s) => s.status !== 'cancelled').length
-            const isSelected = view === 'day' && d === date
+            const isSelected = view !== 'week' && d === date
             return (
               <button
                 key={d}
                 type="button"
-                onClick={() => update({ date: d, view: 'day' })}
+                onClick={() => update({ date: d, view: view === 'week' ? 'day' : undefined })}
                 aria-label={formatDayLong(d)}
                 aria-pressed={isSelected}
                 className={`flex flex-col items-center gap-0.5 rounded-xl py-1.5 transition ${
@@ -199,10 +204,11 @@ export function SchedulePage() {
         options={[
           { value: 'day', label: 'День' },
           { value: 'week', label: 'Неделя' },
+          ...(isDirector ? [{ value: 'rooms' as const, label: 'Кабинеты' }] : []),
         ]}
       />
 
-      {isDirector && (
+      {isDirector && view !== 'rooms' && (
         <SelectField
           value={teacherFilter}
           onChange={(e) => update({ teacher: e.target.value })}
@@ -223,6 +229,21 @@ export function SchedulePage() {
         <div className="flex justify-center py-16">
           <Spinner />
         </div>
+      ) : view === 'rooms' ? (
+        <section className="space-y-2">
+          <h3 className="px-1 text-sm font-semibold text-slate-500 first-letter:uppercase dark:text-slate-400">
+            {formatDayLong(date)}
+            {date === today ? ' · сегодня' : ''}
+          </h3>
+          <RoomGrid
+            date={date}
+            sessions={byDay.get(date) ?? []}
+            dir={dir}
+            canCreate={date >= today}
+            onSelect={setSelected}
+            onCreate={(roomId, start) => setCreating({ roomId, start })}
+          />
+        </section>
       ) : view === 'day' ? (
         <section className="space-y-2">
           <h3 className="px-1 text-sm font-semibold text-slate-500 first-letter:uppercase dark:text-slate-400">
@@ -270,7 +291,9 @@ export function SchedulePage() {
           dir={dir}
           me={profile}
           defaultDate={date < today ? today : date}
-          onClose={() => setCreating(false)}
+          defaultStart={creating.start}
+          defaultRoomId={creating.roomId}
+          onClose={() => setCreating(null)}
           onDone={changed}
         />
       )}

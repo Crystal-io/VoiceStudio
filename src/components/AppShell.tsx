@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { useProfile } from '@/lib/profile'
 import { HomeIcon, UsersIcon, DoorIcon, MusicIcon, CalendarIcon } from '@/components/icons'
@@ -26,6 +26,9 @@ const teacherNav: NavItem[] = [
 export function AppShell() {
   const { user, signOut } = useAuth()
   const { profile } = useProfile()
+  const { pathname } = useLocation()
+  // отчёты открываются с главной — пока они открыты, подсвечиваем «Главную»
+  const inReports = pathname.startsWith('/reports')
 
   const nav = profile?.role === 'director' ? directorNav : teacherNav
   const roleLabel = profile?.role === 'director' ? 'Директор' : 'Педагог'
@@ -67,7 +70,7 @@ export function AppShell() {
                 end={to === '/'}
                 className={({ isActive }) =>
                   `flex flex-1 flex-col items-center gap-1 py-3 text-xs font-medium transition ${
-                    isActive
+                    isActive || (to === '/' && inReports)
                       ? 'text-brand-600 dark:text-brand-400'
                       : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
                   }`

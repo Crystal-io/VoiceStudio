@@ -107,7 +107,7 @@ export function AttendanceList({
   )
 }
 
-function PaidToggle({
+export function PaidToggle({
   on,
   disabled,
   onClick,

@@ -68,6 +68,11 @@ const longDay = new Intl.DateTimeFormat('ru-RU', {
 })
 const dayMonth = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' })
 const shortDay = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' })
+const shortWeekday = new Intl.DateTimeFormat('ru-RU', {
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short',
+})
 
 /** «вторник, 29 сентября» */
 export function formatDayLong(iso: string): string {
@@ -82,6 +87,11 @@ export function formatDayMonth(iso: string): string {
 /** «29 сент.» */
 export function formatDayShort(iso: string): string {
   return shortDay.format(fromISO(iso))
+}
+
+/** «вт, 29 сент.» */
+export function formatDayWeekday(iso: string): string {
+  return shortWeekday.format(fromISO(iso))
 }
 
 /** «28 сент. – 4 окт.» */
@@ -107,4 +117,30 @@ export function fromMinutes(total: number): string {
 /** «15:00–15:45» */
 export function timeRange(start: string, durationMin: number): string {
   return `${hhmm(start)}–${fromMinutes(toMinutes(start) + durationMin)}`
+}
+
+// ---------------------------------------------------------------------------
+// Месяцы — для отчётов
+// ---------------------------------------------------------------------------
+
+export function startOfMonth(iso: string): string {
+  return `${iso.slice(0, 7)}-01`
+}
+
+export function addMonths(iso: string, months: number): string {
+  const d = fromISO(startOfMonth(iso))
+  d.setMonth(d.getMonth() + months)
+  return toISO(d)
+}
+
+export function endOfMonth(iso: string): string {
+  return addDays(addMonths(iso, 1), -1)
+}
+
+const monthName = new Intl.DateTimeFormat('ru-RU', { month: 'long' })
+
+/** «Сентябрь 2026» */
+export function formatMonth(iso: string): string {
+  const name = monthName.format(fromISO(iso))
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} ${iso.slice(0, 4)}`
 }
