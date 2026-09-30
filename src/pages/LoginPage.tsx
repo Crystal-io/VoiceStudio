@@ -215,5 +215,11 @@ function mapError(message: string): string {
   if (m.includes('invalid') && m.includes('token')) return 'Неверный или просроченный код. Попробуйте ещё раз.'
   if (m.includes('rate') || m.includes('limit')) return 'Слишком много попыток. Подождите минуту и повторите.'
   if (m.includes('expired')) return 'Код истёк. Запросите новый.'
+  // Supabase не смог отдать письмо почтовому серверу (SMTP): «Error sending
+  // magic link / confirmation email». Это настройки почты студии, а не опечатка
+  // в адресе — предлагаем вход через Google.
+  if (m.includes('error sending')) {
+    return 'Не удалось отправить письмо с кодом. Войдите через Google (кнопка выше) или сообщите директору студии.'
+  }
   return message
 }
