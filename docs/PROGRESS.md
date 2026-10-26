@@ -2,7 +2,8 @@
 
 Состояние на **26 октября 2026**. Прод: https://voice-studio-ruby.vercel.app ·
 репозиторий: [Crystal-io/VoiceStudio](https://github.com/Crystal-io/VoiceStudio) ·
-план по модулям — [ROADMAP.md](../ROADMAP.md), запуск и деплой — [README.md](../README.md).
+план по модулям — [ROADMAP.md](../ROADMAP.md), запуск и деплой — [README.md](../README.md),
+что умеет приложение для каждой роли, сценарии и истории — [FUNCTIONALITY.md](FUNCTIONALITY.md).
 
 VoiceStage — установочное веб-приложение (PWA) для музыкальной студии:
 1 директор, ~5 педагогов, ~30 детей, индивидуальные и групповые занятия в
