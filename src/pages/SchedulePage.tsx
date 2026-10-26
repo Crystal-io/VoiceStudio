@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useProfile } from '@/lib/profile'
-import { useDirectory } from '@/lib/directory'
-import type { Attendance, Session } from '@/lib/types'
+import { useDirectory, type Directory } from '@/lib/directory'
+import type { Attendance, RoomBooking, Session } from '@/lib/types'
 import {
   addDays,
   formatDayLong,
+  formatDayShort,
   formatWeekRange,
   fromISO,
   isISODate,
@@ -16,15 +17,24 @@ import {
 } from '@/lib/dates'
 import { ensureSessions, loadSessions } from '@/lib/schedule'
 import { loadAttendance } from '@/lib/attendance'
-import { Button, Card, EmptyState, ErrorNote, Segmented, SelectField, Spinner } from '@/components/ui'
-import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } from '@/components/icons'
+import { loadBookings } from '@/lib/bookings'
+import { Button, Card, EmptyState, ErrorNote, Modal, Segmented, SelectField, Spinner } from '@/components/ui'
+import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, DoorIcon, PlusIcon } from '@/components/icons'
 import { LessonCard } from '@/components/schedule/LessonCard'
 import { NewLessonModal } from '@/components/schedule/NewLessonModal'
 import { LessonDialogs } from '@/components/schedule/LessonDialogs'
 import { RoomGrid } from '@/components/schedule/RoomGrid'
+import { RoomHeatmap } from '@/components/schedule/RoomHeatmap'
+import { BookingModal, BookingSheet } from '@/components/schedule/BookingDialogs'
 
-/** rooms — сетка «кабинет × время» за день (только у директора). */
+/**
+ * rooms — загрузка кабинетов за неделю и сетка «кабинет × время» за день.
+ * Видна всем: директору — все занятия, педагогу — свои, чужие как «занято».
+ */
 type View = 'day' | 'week' | 'rooms'
+
+/** Нажали на свободное место в сетке — что ставим. */
+type Slot = { roomId: string | null; start: string }
 
 export function SchedulePage() {
   const { profile } = useProfile()
@@ -35,8 +45,7 @@ export function SchedulePage() {
   const today = todayISO()
   const date = isISODate(params.get('date')) ? params.get('date')! : today
   const viewParam = params.get('view')
-  const view: View =
-    viewParam === 'week' ? 'week' : viewParam === 'rooms' && isDirector ? 'rooms' : 'day'
+  const view: View = viewParam === 'week' ? 'week' : viewParam === 'rooms' ? 'rooms' : 'day'
   // педагог видит только свои занятия; директор — всех или выбранного
   const teacherFilter = isDirector ? (params.get('teacher') ?? 'all') : (profile?.id ?? '')
   // сетке кабинетов нужны занятия всех педагогов
@@ -56,17 +65,25 @@ export function SchedulePage() {
     null,
   )
   const [selected, setSelected] = useState<Session | null>(null)
+  const [bookings, setBookings] = useState<RoomBooking[]>([])
+  const [choosing, setChoosing] = useState<Slot | null>(null)
+  const [booking, setBooking] = useState<Partial<Slot> | null>(null)
+  const [selectedBooking, setSelectedBooking] = useState<RoomBooking | null>(null)
 
   useEffect(() => {
     let alive = true
     void (async () => {
       const ensureError = await ensureSessions(weekEnd)
-      const res = await loadSessions(weekStart, weekEnd, loadTeacher)
+      const [res, book] = await Promise.all([
+        loadSessions(weekStart, weekEnd, loadTeacher),
+        loadBookings(weekStart, weekEnd),
+      ])
       const att = await loadAttendance(res.sessions.map((s) => s.id))
       if (!alive) return
       setSessions(res.sessions)
+      setBookings(book.bookings)
       setAttendance(att.bySession)
-      setLoadError(ensureError ?? res.error ?? att.error)
+      setLoadError(ensureError ?? res.error ?? book.error ?? att.error)
     })()
     return () => {
       alive = false
@@ -90,6 +107,8 @@ export function SchedulePage() {
   function changed(goTo?: string) {
     setSelected(null)
     setCreating(null)
+    setBooking(null)
+    setSelectedBooking(null)
     if (goTo) update({ date: goTo })
     setVersion((v) => v + 1)
   }
@@ -160,12 +179,14 @@ export function SchedulePage() {
           {days.map((d, i) => {
             const count = (byDay.get(d) ?? []).filter((s) => s.status !== 'cancelled').length
             const isSelected = view !== 'week' && d === date
+            const holiday = dir?.holidays.get(d)
             return (
               <button
                 key={d}
                 type="button"
                 onClick={() => update({ date: d, view: view === 'week' ? 'day' : undefined })}
-                aria-label={formatDayLong(d)}
+                aria-label={holiday ? `${formatDayLong(d)}, праздник: ${holiday}` : formatDayLong(d)}
+                title={holiday}
                 aria-pressed={isSelected}
                 className={`flex flex-col items-center gap-0.5 rounded-xl py-1.5 transition ${
                   isSelected
@@ -183,7 +204,7 @@ export function SchedulePage() {
                 <span
                   className={`flex size-7 items-center justify-center rounded-full text-sm font-semibold ${
                     d === today && !isSelected ? 'ring-2 ring-brand-500' : ''
-                  }`}
+                  } ${holiday && !isSelected ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/50 dark:text-rose-300' : ''}`}
                 >
                   {fromISO(d).getDate()}
                 </span>
@@ -204,7 +225,7 @@ export function SchedulePage() {
         options={[
           { value: 'day', label: 'День' },
           { value: 'week', label: 'Неделя' },
-          ...(isDirector ? [{ value: 'rooms' as const, label: 'Кабинеты' }] : []),
+          { value: 'rooms', label: 'Кабинеты' },
         ]}
       />
 
@@ -229,27 +250,51 @@ export function SchedulePage() {
         <div className="flex justify-center py-16">
           <Spinner />
         </div>
-      ) : view === 'rooms' ? (
-        <section className="space-y-2">
-          <h3 className="px-1 text-sm font-semibold text-slate-500 first-letter:uppercase dark:text-slate-400">
-            {formatDayLong(date)}
-            {date === today ? ' · сегодня' : ''}
-          </h3>
-          <RoomGrid
-            date={date}
-            sessions={byDay.get(date) ?? []}
+      ) : view === 'rooms' && profile ? (
+        <div className="space-y-4">
+          <RoomHeatmap
+            days={days}
+            sessions={sessions}
+            bookings={bookings}
             dir={dir}
-            canCreate={date >= today}
-            onSelect={setSelected}
-            onCreate={(roomId, start) => setCreating({ roomId, start })}
+            selected={date}
+            onSelect={(d) => update({ date: d })}
           />
-        </section>
+          <section className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <DayHeading date={date} today={today} dir={dir} />
+              <div className="flex shrink-0 gap-1.5">
+                <Link
+                  to="/board"
+                  className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-100 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800"
+                >
+                  Табло
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setBooking({})}
+                  className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-brand-600 ring-1 ring-brand-200 transition hover:bg-brand-50 dark:text-brand-400 dark:ring-brand-800 dark:hover:bg-brand-950/40"
+                >
+                  Забронировать
+                </button>
+              </div>
+            </div>
+            <RoomGrid
+              date={date}
+              sessions={byDay.get(date) ?? []}
+              bookings={bookings.filter((b) => b.date === date)}
+              dir={dir}
+              me={profile}
+              canCreate={date >= today}
+              onSelect={setSelected}
+              onSelectBooking={setSelectedBooking}
+              onCreate={(roomId, start) => setChoosing({ roomId, start })}
+            />
+          </section>
+        </div>
       ) : view === 'day' ? (
         <section className="space-y-2">
-          <h3 className="px-1 text-sm font-semibold text-slate-500 first-letter:uppercase dark:text-slate-400">
-            {formatDayLong(date)}
-            {date === today ? ' · сегодня' : ''}
-          </h3>
+          <DayHeading date={date} today={today} dir={dir} />
           {(byDay.get(date) ?? []).length > 0 ? (
             renderList(byDay.get(date)!)
           ) : (
@@ -276,10 +321,7 @@ export function SchedulePage() {
             .filter((d) => byDay.has(d))
             .map((d) => (
               <section key={d} className="space-y-2">
-                <h3 className="px-1 text-sm font-semibold text-slate-500 first-letter:uppercase dark:text-slate-400">
-                  {formatDayLong(d)}
-                  {d === today ? ' · сегодня' : ''}
-                </h3>
+                <DayHeading date={d} today={today} dir={dir} />
                 {renderList(byDay.get(d)!)}
               </section>
             ))}
@@ -310,7 +352,97 @@ export function SchedulePage() {
           reloadDir={reloadDir}
         />
       )}
+
+      {choosing && dir && (
+        <SlotChoice
+          slot={choosing}
+          date={date}
+          dir={dir}
+          onLesson={() => {
+            setCreating(choosing)
+            setChoosing(null)
+          }}
+          onBooking={() => {
+            setBooking(choosing)
+            setChoosing(null)
+          }}
+          onClose={() => setChoosing(null)}
+        />
+      )}
+
+      {booking && dir && profile && (
+        <BookingModal
+          dir={dir}
+          me={profile}
+          defaultDate={date < today ? today : date}
+          defaultStart={booking.start}
+          defaultRoomId={booking.roomId}
+          onClose={() => setBooking(null)}
+          onDone={changed}
+        />
+      )}
+
+      {selectedBooking && dir && profile && (
+        <BookingSheet
+          key={selectedBooking.id}
+          booking={selectedBooking}
+          dir={dir}
+          me={profile}
+          onClose={() => setSelectedBooking(null)}
+          onChanged={() => changed()}
+        />
+      )}
     </div>
+  )
+}
+
+/** «Вторник, 27 октября · сегодня · праздник: …» */
+function DayHeading({ date, today, dir }: { date: string; today: string; dir: Directory }) {
+  const holiday = dir.holidays.get(date)
+  return (
+    <h3 className="min-w-0 px-1 text-sm font-semibold text-slate-500 first-letter:uppercase dark:text-slate-400">
+      {formatDayLong(date)}
+      {date === today ? ' · сегодня' : ''}
+      {holiday && <span className="text-rose-500"> · {holiday}</span>}
+    </h3>
+  )
+}
+
+/** Свободное место в сетке: поставить занятие или забронировать кабинет. */
+function SlotChoice({
+  slot,
+  date,
+  dir,
+  onLesson,
+  onBooking,
+  onClose,
+}: {
+  slot: Slot
+  date: string
+  dir: Directory
+  onLesson: () => void
+  onBooking: () => void
+  onClose: () => void
+}) {
+  const room = slot.roomId ? dir.roomById.get(slot.roomId)?.name : 'Без кабинета'
+  return (
+    <Modal title="Что поставить?" onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          {room} · {formatDayShort(date)}, {slot.start}
+        </p>
+        <Button type="button" onClick={onLesson} className="w-full">
+          <CalendarIcon className="size-5" />
+          Занятие
+        </Button>
+        {slot.roomId && (
+          <Button type="button" variant="ghost" onClick={onBooking} className="w-full">
+            <DoorIcon className="size-5" />
+            Бронь кабинета (репетиция, концерт…)
+          </Button>
+        )}
+      </div>
+    </Modal>
   )
 }
 

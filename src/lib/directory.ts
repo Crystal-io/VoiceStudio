@@ -1,14 +1,26 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { studentColumns } from '@/lib/students'
-import type { Group, GroupMember, Profile, Room, Student } from '@/lib/types'
+import type { Group, GroupMember, Holiday, Profile, Room, Student, Studio } from '@/lib/types'
+
+/** Если студию прочитать не удалось — часы по умолчанию (как в базе). */
+const DEFAULT_STUDIO: Studio = {
+  id: '',
+  name: '',
+  open_time: '10:00:00',
+  close_time: '21:00:00',
+  work_days: [0, 1, 2, 3, 4, 5],
+}
 
 /**
- * Справочники студии одним пакетом: педагоги, кабинеты, ученики, группы и
- * их составы. Их немного (десятки строк), поэтому грузим целиком и
- * сопоставляем по id на клиенте.
+ * Справочники студии одним пакетом: часы работы, праздники, педагоги,
+ * кабинеты, ученики, группы и их составы. Их немного (десятки строк),
+ * поэтому грузим целиком и сопоставляем по id на клиенте.
  */
 export type Directory = {
+  studio: Studio
+  /** дата «ГГГГ-ММ-ДД» → название праздника */
+  holidays: Map<string, string>
   profiles: Profile[]
   rooms: Room[]
   students: Student[]
@@ -22,7 +34,9 @@ export type Directory = {
 }
 
 export async function loadDirectory(): Promise<{ dir: Directory; error: string | null }> {
-  const [profiles, rooms, students, groups, members] = await Promise.all([
+  const [studio, holidays, profiles, rooms, students, groups, members] = await Promise.all([
+    supabase.from('studios').select('id, name, open_time, close_time, work_days').maybeSingle(),
+    supabase.from('holidays').select('id, studio_id, date, name'),
     supabase
       .from('profiles')
       .select('id, studio_id, full_name, role, color, is_active, created_at')
@@ -33,7 +47,13 @@ export async function loadDirectory(): Promise<{ dir: Directory; error: string |
     supabase.from('group_members').select('group_id, student_id'),
   ])
   const error =
-    profiles.error ?? rooms.error ?? students.error ?? groups.error ?? members.error
+    studio.error ??
+    holidays.error ??
+    profiles.error ??
+    rooms.error ??
+    students.error ??
+    groups.error ??
+    members.error
 
   const membersByGroup = new Map<string, string[]>()
   for (const m of (members.data as GroupMember[]) ?? []) {
@@ -50,6 +70,8 @@ export async function loadDirectory(): Promise<{ dir: Directory; error: string |
 
   return {
     dir: {
+      studio: (studio.data as Studio | null) ?? DEFAULT_STUDIO,
+      holidays: new Map(((holidays.data as Holiday[]) ?? []).map((h) => [h.date, h.name])),
       profiles: p,
       rooms: r,
       students: s,

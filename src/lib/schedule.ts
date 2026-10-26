@@ -1,7 +1,8 @@
 import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
 import type { LessonSeries, Profile, Session } from '@/lib/types'
-import { addDays, datesOnWeekdays, formatDayShort, timeRange, todayISO, WEEKDAYS_SHORT, weekdayOf } from '@/lib/dates'
+import { addDays, datesOnWeekdays, formatDayShort, timeRange, todayISO, toMinutes, WEEKDAYS_SHORT, weekdayOf } from '@/lib/dates'
+import { isLiveBooking, loadBookings } from '@/lib/bookings'
 
 /** На сколько дней вперёд заранее создаём занятия из серий. */
 export const HORIZON_DAYS = 16 * 7
@@ -145,7 +146,12 @@ export type ConflictQuery = {
   duration: number
   ignoreSeriesId?: string | null
   ignoreSessionId?: string | null
+  /** правим бронь — её саму не считаем */
+  ignoreBookingId?: string | null
 }
+
+/** «Педагог», который ни с кем не совпадёт — для проверки только кабинета (брони). */
+export const NO_TEACHER = '00000000-0000-0000-0000-000000000000'
 
 export type Conflict = {
   key: string
@@ -203,6 +209,30 @@ export async function findConflicts(
       recurring: !!s.series_id,
       dates: [s.date],
     })
+  }
+
+  // брони того же кабинета на эти даты и время (снятые не мешают)
+  if (q.roomId) {
+    const sorted = [...q.dates].sort()
+    const res = await loadBookings(sorted[0], sorted[sorted.length - 1], q.roomId)
+    if (res.error) return { conflicts: [], error: res.error }
+    const dates = new Set(q.dates)
+    const st = toMinutes(q.start)
+    for (const b of res.bookings) {
+      if (!dates.has(b.date) || b.id === q.ignoreBookingId || !isLiveBooking(b)) continue
+      const bs = toMinutes(b.start_time)
+      if (!(bs < st + q.duration && st < bs + b.duration_min)) continue
+      byKey.set(`b:${b.id}`, {
+        key: `b:${b.id}`,
+        clash: 'room',
+        title: `Бронь: ${b.title}`,
+        teacher: (b.created_by && dir.profileById.get(b.created_by)?.full_name) || 'Бронь',
+        room: dir.roomById.get(b.room_id)?.name ?? null,
+        when: `${formatDayShort(b.date)}, ${timeRange(b.start_time, b.duration_min)}`,
+        recurring: false,
+        dates: [b.date],
+      })
+    }
   }
   return { conflicts: [...byKey.values()], error: null }
 }

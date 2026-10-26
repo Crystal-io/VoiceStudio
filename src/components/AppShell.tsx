@@ -30,7 +30,7 @@ export function AppShell() {
   const { profile } = useProfile()
   const { pathname } = useLocation()
   // отчёты открываются с главной — пока они открыты, подсвечиваем «Главную»
-  const inReports = pathname.startsWith('/reports')
+  const inReports = pathname.startsWith('/reports') || pathname.startsWith('/studio')
 
   const nav = profile?.role === 'director' ? directorNav : teacherNav
   const roleLabel = profile?.role === 'director' ? 'Директор' : 'Педагог'

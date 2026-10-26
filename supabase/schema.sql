@@ -1338,3 +1338,130 @@ create policy student_photos_delete on storage.objects
   using (bucket_id = 'student-photos'
          and (storage.foldername(name))[1] = public.current_studio_id()::text
          and public.can_edit_student((storage.foldername(name))[2]));
+
+-- ============================================================================
+-- M8: кабинеты — часы работы студии, брони кабинета без урока, праздники
+--  * часы работы и рабочие дни студии — от них считается загрузка кабинетов;
+--  * бронь — кабинет занят не уроком (репетиция, концерт, настройщик…).
+--    Бронь с auto_release снимается сама, если её не подтвердили в течение
+--    15 минут после начала (считает приложение по часам устройства, как и
+--    «не отмечено»); подтвердить может любой в студии — например, на табло;
+--  * праздники только помечаются в календаре: занятия и брони в эти дни
+--    ставятся как обычно.
+-- ============================================================================
+
+alter table public.studios add column if not exists open_time time not null default '10:00';
+alter table public.studios add column if not exists close_time time not null default '21:00';
+-- рабочие дни: 0=Пн … 6=Вс
+alter table public.studios add column if not exists work_days int[] not null default '{0,1,2,3,4,5}';
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'studios_hours_ck') then
+    alter table public.studios add constraint studios_hours_ck check (close_time > open_time);
+  end if;
+end;
+$$;
+
+create table if not exists public.room_bookings (
+  id            uuid primary key default gen_random_uuid(),
+  studio_id     uuid not null references public.studios(id) on delete cascade,
+  room_id       uuid not null references public.rooms(id) on delete cascade,
+  date          date not null,
+  start_time    time not null,
+  duration_min  int  not null check (duration_min > 0),
+  title         text not null,                 -- «Репетиция», «Настройщик»…
+  note          text,
+  auto_release  boolean not null default true, -- снять, если не подтвердят
+  confirmed_at  timestamptz,
+  created_by    uuid references public.profiles(id) on delete set null,
+  created_at    timestamptz not null default now()
+);
+create index if not exists room_bookings_studio_date_idx on public.room_bookings(studio_id, date);
+create index if not exists room_bookings_room_date_idx on public.room_bookings(room_id, date);
+
+create table if not exists public.holidays (
+  id          uuid primary key default gen_random_uuid(),
+  studio_id   uuid not null references public.studios(id) on delete cascade,
+  date        date not null,
+  name        text not null,
+  created_at  timestamptz not null default now(),
+  unique (studio_id, date)
+);
+
+alter table public.room_bookings enable row level security;
+alter table public.holidays      enable row level security;
+
+-- Брони: видят все в студии; ставит любой (от своего имени); меняет и
+-- снимает автор или директор.
+drop policy if exists room_bookings_select on public.room_bookings;
+create policy room_bookings_select on public.room_bookings
+  for select to authenticated using (studio_id = public.current_studio_id());
+drop policy if exists room_bookings_insert on public.room_bookings;
+create policy room_bookings_insert on public.room_bookings
+  for insert to authenticated
+  with check (studio_id = public.current_studio_id() and created_by = auth.uid());
+drop policy if exists room_bookings_update on public.room_bookings;
+create policy room_bookings_update on public.room_bookings
+  for update to authenticated
+  using (studio_id = public.current_studio_id() and (public.is_director() or created_by = auth.uid()))
+  with check (studio_id = public.current_studio_id() and (public.is_director() or created_by = auth.uid()));
+drop policy if exists room_bookings_delete on public.room_bookings;
+create policy room_bookings_delete on public.room_bookings
+  for delete to authenticated
+  using (studio_id = public.current_studio_id() and (public.is_director() or created_by = auth.uid()));
+
+-- Праздники: видят все, ведёт директор.
+drop policy if exists holidays_select on public.holidays;
+create policy holidays_select on public.holidays
+  for select to authenticated using (studio_id = public.current_studio_id());
+drop policy if exists holidays_write on public.holidays;
+create policy holidays_write on public.holidays
+  for all to authenticated
+  using (studio_id = public.current_studio_id() and public.is_director())
+  with check (studio_id = public.current_studio_id() and public.is_director());
+
+-- Бронь: автор — тот, кто поставил (не подменить); кабинет — из той же
+-- студии; название без лишних пробелов.
+create or replace function public.room_bookings_before_write()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if tg_op = 'INSERT' then
+    new.created_by := auth.uid();
+  else
+    new.created_by := old.created_by;
+  end if;
+  new.title := btrim(new.title);
+  if new.title = '' then
+    raise exception 'Напишите, для чего бронь';
+  end if;
+  if not exists (select 1 from public.rooms
+                 where id = new.room_id and studio_id = new.studio_id) then
+    raise exception 'Кабинет не из этой студии';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists room_bookings_before_write on public.room_bookings;
+create trigger room_bookings_before_write
+  before insert or update on public.room_bookings
+  for each row execute function public.room_bookings_before_write();
+
+-- Подтвердить бронь («я в кабинете») — может любой в студии, хоть с табло.
+create or replace function public.confirm_booking(p_booking uuid)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.room_bookings
+  set confirmed_at = now()
+  where id = p_booking
+    and studio_id = public.current_studio_id()
+    and confirmed_at is null;
+$$;
+revoke all on function public.confirm_booking(uuid) from public, anon;
+grant execute on function public.confirm_booking(uuid) to authenticated;

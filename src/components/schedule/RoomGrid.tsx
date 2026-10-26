@@ -1,9 +1,12 @@
-import { useEffect, useState, type MouseEvent } from 'react'
+import type { MouseEvent } from 'react'
+import { useNowMinutes } from '@/lib/useNow'
 import type { Directory } from '@/lib/directory'
-import type { Session } from '@/lib/types'
+import type { Profile, RoomBooking, Session } from '@/lib/types'
 import { fromMinutes, hhmm, todayISO, toMinutes } from '@/lib/dates'
 import { isUnmarked } from '@/lib/attendance'
 import { lessonTitle, teacherColor } from '@/lib/schedule'
+import { bookingState, confirmDeadline } from '@/lib/bookings'
+import { busyIntervals, freeGaps, workRange } from '@/lib/rooms'
 import { Card, EmptyState } from '@/components/ui'
 import { DoorIcon } from '@/components/icons'
 
@@ -11,40 +14,52 @@ import { DoorIcon } from '@/components/icons'
 const PX = 1.2
 /** Отступ сверху и снизу, чтобы подписи крайних часов не обрезались. */
 const PAD = 8
-/** Рабочий день по умолчанию; раздвигается, если занятия раньше или позже. */
-const DAY_FROM = 9 * 60
-const DAY_TO = 21 * 60
 /** Больше стольких кабинетов — сетка листается вбок в своей рамке. */
 const FIT_COLUMNS = 4
+/** Свободное окно короче этого не подписываем. */
+const MIN_GAP = 30
 
 type Column = { id: string | null; name: string; inactive: boolean }
-type Placed = { session: Session; lane: number; lanes: number }
+type Item =
+  | { kind: 'session'; start: number; end: number; session: Session }
+  | { kind: 'booking'; start: number; end: number; booking: RoomBooking }
+type Placed = { item: Item; lane: number; lanes: number }
 
 /**
- * Занятость кабинетов за день: колонки — кабинеты, строки — часы.
- * Нажатие на занятие открывает его, на свободное место — новое занятие
- * в этом кабинете и в это время.
+ * Занятость кабинетов за день: колонки — кабинеты, строки — часы работы
+ * студии. Директор видит все занятия; педагог — свои, а чужие — как
+ * «занято». Брони без урока — штриховкой, свободные окна — пунктиром.
+ * Нажатие на свободное место — новое занятие или бронь в это время.
  */
 export function RoomGrid({
   date,
   sessions,
+  bookings,
   dir,
+  me,
   canCreate,
   onSelect,
+  onSelectBooking,
   onCreate,
 }: {
   date: string
   sessions: Session[]
+  bookings: RoomBooking[]
   dir: Directory
+  me: Profile
   canCreate: boolean
   onSelect: (s: Session) => void
+  onSelectBooking: (b: RoomBooking) => void
   onCreate: (roomId: string | null, start: string) => void
 }) {
   const now = useNowMinutes()
+  const isDirector = me.role === 'director'
   const live = sessions.filter((s) => s.status !== 'cancelled')
   const cancelled = sessions.length - live.length
+  const liveBookings = bookings.filter((b) => bookingState(b) !== 'released')
+  const released = bookings.length - liveBookings.length
 
-  const used = new Set(live.map((s) => s.room_id))
+  const used = new Set<string | null>([...live.map((s) => s.room_id), ...liveBookings.map((b) => b.room_id)])
   const columns: Column[] = dir.rooms
     .filter((r) => r.is_active || used.has(r.id))
     .map((r) => ({ id: r.id, name: r.name, inactive: !r.is_active }))
@@ -56,26 +71,43 @@ export function RoomGrid({
         <EmptyState
           icon={<DoorIcon className="size-6" />}
           title="Кабинетов пока нет"
-          hint="Добавьте их в разделе «Кабинеты» — здесь появится сетка занятости."
+          hint="Директор добавляет их в разделе «Кабинеты» — здесь появится сетка занятости."
         />
       </Card>
     )
   }
 
-  let from = DAY_FROM
-  let to = DAY_TO
-  for (const s of live) {
-    const start = toMinutes(s.start_time)
-    from = Math.min(from, Math.floor(start / 60) * 60)
-    to = Math.max(to, Math.ceil((start + s.duration_min) / 60) * 60)
+  const items: Item[] = [
+    ...live.map((s) => {
+      const start = toMinutes(s.start_time)
+      return { kind: 'session' as const, start, end: start + s.duration_min, session: s }
+    }),
+    ...liveBookings.map((b) => {
+      const start = toMinutes(b.start_time)
+      return { kind: 'booking' as const, start, end: start + b.duration_min, booking: b }
+    }),
+  ]
+  const roomOf = (i: Item) => (i.kind === 'session' ? i.session.room_id : i.booking.room_id)
+
+  // сетка — по часам работы студии; раздвигается, если занятия раньше или позже
+  const [open, close] = workRange(dir.studio)
+  let from = Math.floor(open / 60) * 60
+  let to = Math.ceil(close / 60) * 60
+  for (const i of items) {
+    from = Math.min(from, Math.floor(i.start / 60) * 60)
+    to = Math.max(to, Math.ceil(i.end / 60) * 60)
   }
   to = Math.min(to, 24 * 60)
   const height = (to - from) * PX + PAD * 2
   const y = (min: number) => PAD + (min - from) * PX
   const hours = Array.from({ length: (to - from) / 60 + 1 }, (_, i) => from + i * 60)
 
-  const isToday = date === todayISO()
+  const today = todayISO()
+  const isToday = date === today
   const wide = columns.length > FIT_COLUMNS
+  // свободные окна — только в рабочие часы и только впереди
+  const gapFrom = isToday ? Math.max(open, Math.ceil(now / 15) * 15) : open
+  const showGaps = date >= today
 
   function create(e: MouseEvent<HTMLDivElement>, roomId: string | null) {
     if (!canCreate) return
@@ -126,6 +158,14 @@ export function RoomGrid({
             </div>
 
             <div className="relative flex flex-1">
+              {/* Вне рабочих часов — притушено */}
+              {open > from && (
+                <div className="pointer-events-none absolute inset-x-0 top-0 bg-slate-50 dark:bg-slate-950/40" style={{ height: y(open) }} />
+              )}
+              {close < to && (
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-slate-50 dark:bg-slate-950/40" style={{ top: y(close) }} />
+              )}
+
               {/* Линии часов и получасов */}
               {hours.map((h) => (
                 <div key={h} className="pointer-events-none absolute inset-x-0" style={{ top: y(h) }}>
@@ -147,18 +187,51 @@ export function RoomGrid({
                     canCreate ? 'cursor-pointer transition hover:bg-brand-50/40 dark:hover:bg-brand-950/20' : ''
                   }`}
                 >
-                  {layout(live.filter((s) => s.room_id === c.id)).map(({ session, lane, lanes }) => (
-                    <Block
-                      key={session.id}
-                      session={session}
-                      dir={dir}
-                      top={y(toMinutes(session.start_time))}
-                      height={session.duration_min * PX}
-                      lane={lane}
-                      lanes={lanes}
-                      onClick={() => onSelect(session)}
-                    />
-                  ))}
+                  {showGaps &&
+                    c.id !== null &&
+                    freeGaps(busyIntervals(c.id, date, live, liveBookings), gapFrom, close, MIN_GAP).map(([s, e]) => (
+                      <div
+                        key={s}
+                        className="pointer-events-none absolute inset-x-1 rounded-md border border-dashed border-emerald-300 dark:border-emerald-800"
+                        style={{ top: y(s) + 2, height: (e - s) * PX - 4 }}
+                      >
+                        <span className="block px-1 pt-0.5 text-[10px] leading-tight text-emerald-700 dark:text-emerald-400">
+                          свободно {fromMinutes(s)}–{fromMinutes(e)}
+                        </span>
+                      </div>
+                    ))}
+
+                  {layout(items.filter((i) => roomOf(i) === c.id)).map(({ item, lane, lanes }) => {
+                    const pos = {
+                      top: y(item.start),
+                      height: (item.end - item.start) * PX,
+                      lane,
+                      lanes,
+                    }
+                    if (item.kind === 'booking') {
+                      return (
+                        <BookingBlock
+                          key={`b:${item.booking.id}`}
+                          booking={item.booking}
+                          dir={dir}
+                          {...pos}
+                          onClick={() => onSelectBooking(item.booking)}
+                        />
+                      )
+                    }
+                    const mine = isDirector || item.session.teacher_id === me.id
+                    return mine ? (
+                      <Block
+                        key={item.session.id}
+                        session={item.session}
+                        dir={dir}
+                        {...pos}
+                        onClick={() => onSelect(item.session)}
+                      />
+                    ) : (
+                      <BusyBlock key={item.session.id} session={item.session} {...pos} />
+                    )
+                  })}
                 </div>
               ))}
 
@@ -178,36 +251,38 @@ export function RoomGrid({
 
       <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
         {canCreate
-          ? 'Нажмите на свободное место, чтобы поставить занятие в этот кабинет и время.'
+          ? 'Нажмите на свободное место, чтобы поставить занятие или забронировать кабинет.'
           : 'Прошедший день — только просмотр.'}
-        {cancelled > 0 && ` Отменённые (${cancelled}) не показаны.`}
+        {!isDirector && ' Чужие занятия — «занято».'}
+        {cancelled > 0 && ` Отменённые занятия (${cancelled}) не показаны.`}
+        {released > 0 && ` Снятые брони (${released}) не показаны.`}
       </p>
     </div>
   )
 }
 
+type Pos = { top: number; height: number; lane: number; lanes: number }
+
+function blockStyle({ top, height, lane, lanes }: Pos) {
+  return {
+    top: top + 1,
+    height: Math.max(height - 2, 14),
+    left: `calc(${(lane / lanes) * 100}% + 2px)`,
+    width: `calc(${100 / lanes}% - 4px)`,
+  }
+}
+
 function Block({
   session,
   dir,
-  top,
-  height,
-  lane,
-  lanes,
   onClick,
-}: {
-  session: Session
-  dir: Directory
-  top: number
-  height: number
-  lane: number
-  lanes: number
-  onClick: () => void
-}) {
+  ...pos
+}: Pos & { session: Session; dir: Directory; onClick: () => void }) {
   const teacher = dir.profileById.get(session.teacher_id)
   const color = teacherColor(teacher)
   const unmarked = isUnmarked(session)
   // два занятия в одном кабинете одновременно — пересечение
-  const clash = lanes > 1
+  const clash = pos.lanes > 1
   return (
     <button
       type="button"
@@ -218,19 +293,12 @@ function Block({
       className={`absolute z-10 overflow-hidden rounded-md px-1 py-0.5 text-left text-[11px] leading-tight text-slate-800 transition hover:brightness-95 dark:text-slate-100 ${
         clash ? 'ring-2 ring-rose-500' : unmarked ? 'ring-1 ring-amber-400' : ''
       }`}
-      style={{
-        top: top + 1,
-        height: Math.max(height - 2, 14),
-        left: `calc(${(lane / lanes) * 100}% + 2px)`,
-        width: `calc(${100 / lanes}% - 4px)`,
-        background: `${color}26`,
-        borderLeft: `3px solid ${color}`,
-      }}
+      style={{ ...blockStyle(pos), background: `${color}26`, borderLeft: `3px solid ${color}` }}
       title={`${hhmm(session.start_time)} · ${lessonTitle(session, dir)} · ${teacher?.full_name ?? ''}`}
     >
       <span className="block font-semibold tabular-nums">{hhmm(session.start_time)}</span>
       <span className="block truncate">{lessonTitle(session, dir)}</span>
-      {height >= 48 && (
+      {pos.height >= 48 && (
         <span className="block truncate text-slate-500 dark:text-slate-400">
           {teacher?.full_name.split(' ')[0]}
         </span>
@@ -239,14 +307,67 @@ function Block({
   )
 }
 
-/**
- * Раскладка пересекающихся занятий одного кабинета по дорожкам: такие
- * занятия встают рядом, каждое — на свою часть ширины колонки.
- */
-function layout(sessions: Session[]): Placed[] {
-  const sorted = [...sessions].sort(
-    (a, b) => toMinutes(a.start_time) - toMinutes(b.start_time) || b.duration_min - a.duration_min,
+/** Чужое занятие в сетке педагога: время и «занято», без подробностей. */
+function BusyBlock({ session, ...pos }: Pos & { session: Session }) {
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className={`absolute z-10 overflow-hidden rounded-md bg-slate-200/70 px-1 py-0.5 text-[11px] leading-tight text-slate-500 dark:bg-slate-700/60 dark:text-slate-300 ${
+        pos.lanes > 1 ? 'ring-2 ring-rose-500' : ''
+      }`}
+      style={blockStyle(pos)}
+    >
+      <span className="block font-semibold tabular-nums">{hhmm(session.start_time)}</span>
+      <span className="block truncate">занято</span>
+    </div>
   )
+}
+
+function BookingBlock({
+  booking,
+  dir,
+  onClick,
+  ...pos
+}: Pos & { booking: RoomBooking; dir: Directory; onClick: () => void }) {
+  const state = bookingState(booking)
+  const author = booking.created_by ? dir.profileById.get(booking.created_by)?.full_name : null
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      className={`absolute z-10 overflow-hidden rounded-md px-1 py-0.5 text-left text-[11px] leading-tight text-slate-700 transition hover:brightness-95 dark:text-slate-200 ${
+        pos.lanes > 1 ? 'ring-2 ring-rose-500' : state === 'confirm_now' ? 'ring-2 ring-amber-400' : 'ring-1 ring-slate-300 dark:ring-slate-600'
+      }`}
+      style={{
+        ...blockStyle(pos),
+        background:
+          'repeating-linear-gradient(135deg, rgb(148 163 184 / 0.18) 0 6px, rgb(148 163 184 / 0.06) 6px 12px)',
+      }}
+      title={`Бронь · ${hhmm(booking.start_time)} · ${booking.title}${author ? ` · ${author}` : ''}`}
+    >
+      <span className="block font-semibold tabular-nums">{hhmm(booking.start_time)} · бронь</span>
+      <span className="block truncate">{booking.title}</span>
+      {state === 'confirm_now' ? (
+        <span className="block truncate font-medium text-amber-700 dark:text-amber-300">
+          подтвердить до {confirmDeadline(booking)}
+        </span>
+      ) : (
+        pos.height >= 48 &&
+        author && <span className="block truncate text-slate-500 dark:text-slate-400">{author.split(' ')[0]}</span>
+      )}
+    </button>
+  )
+}
+
+/**
+ * Раскладка пересекающихся занятий и броней одного кабинета по дорожкам:
+ * такие встают рядом, каждое — на свою часть ширины колонки.
+ */
+function layout(items: Item[]): Placed[] {
+  const sorted = [...items].sort((a, b) => a.start - b.start || b.end - a.end)
   const out: Placed[] = []
   let cluster: Placed[] = []
   let laneEnds: number[] = []
@@ -259,34 +380,18 @@ function layout(sessions: Session[]): Placed[] {
     laneEnds = []
   }
 
-  for (const s of sorted) {
-    const start = toMinutes(s.start_time)
-    const end = start + s.duration_min
-    if (start >= clusterEnd) flush()
-    let lane = laneEnds.findIndex((e) => e <= start)
+  for (const item of sorted) {
+    if (item.start >= clusterEnd) flush()
+    let lane = laneEnds.findIndex((e) => e <= item.start)
     if (lane === -1) {
       lane = laneEnds.length
-      laneEnds.push(end)
+      laneEnds.push(item.end)
     } else {
-      laneEnds[lane] = end
+      laneEnds[lane] = item.end
     }
-    cluster.push({ session: s, lane, lanes: 1 })
-    clusterEnd = Math.max(clusterEnd, end)
+    cluster.push({ item, lane, lanes: 1 })
+    clusterEnd = Math.max(clusterEnd, item.end)
   }
   flush()
   return out
-}
-
-/** Текущее время в минутах; обновляется раз в минуту. */
-function useNowMinutes(): number {
-  const read = () => {
-    const d = new Date()
-    return d.getHours() * 60 + d.getMinutes()
-  }
-  const [now, setNow] = useState(read)
-  useEffect(() => {
-    const id = setInterval(() => setNow(read()), 60_000)
-    return () => clearInterval(id)
-  }, [])
-  return now
 }

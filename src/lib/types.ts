@@ -120,3 +120,39 @@ export type Attendance = {
   status: AttendanceStatus | null
   is_paid: boolean
 }
+
+/** Студия: часы работы и рабочие дни (0=Пн … 6=Вс) — от них считается загрузка. */
+export type Studio = {
+  id: string
+  name: string
+  open_time: string
+  close_time: string
+  work_days: number[]
+}
+
+/**
+ * Бронь кабинета без урока: репетиция, концерт, настройщик… С auto_release
+ * снимается сама, если её не подтвердили в течение 15 минут после начала.
+ */
+export type RoomBooking = {
+  id: string
+  studio_id: string
+  room_id: string
+  date: string
+  start_time: string
+  duration_min: number
+  title: string
+  note: string | null
+  auto_release: boolean
+  confirmed_at: string | null
+  created_by: string | null
+  created_at: string
+}
+
+/** Праздник — только пометка в календаре, занятия в этот день идут как обычно. */
+export type Holiday = {
+  id: string
+  studio_id: string
+  date: string
+  name: string
+}

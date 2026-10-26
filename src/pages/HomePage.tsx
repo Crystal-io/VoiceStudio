@@ -8,10 +8,12 @@ import { came, loadAttendance, loadDebts } from '@/lib/attendance'
 import { formatDuration, percent, plural } from '@/lib/format'
 import { Card, Spinner } from '@/components/ui'
 import {
+  CalendarIcon,
   ChartIcon,
   CheckIcon,
   ChevronRightIcon,
   DoorIcon,
+  MonitorIcon,
   MusicIcon,
   UsersIcon,
   WalletIcon,
@@ -109,8 +111,41 @@ function DirectorHome() {
 
       <ReportsSummary />
 
+      <RoomsLinks director />
+
       <TodayLessons />
     </div>
+  )
+}
+
+/** Загрузка кабинетов, табло для холла и (директору) часы работы и праздники. */
+function RoomsLinks({ director = false }: { director?: boolean }) {
+  return (
+    <section className="space-y-2">
+      <h3 className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Кабинеты</h3>
+      <Card className="divide-y divide-slate-100 dark:divide-slate-800">
+        <ReportRow
+          to="/schedule?view=rooms"
+          icon={<DoorIcon className="size-5" />}
+          title="Загрузка кабинетов"
+          value="неделя, свободные окна, брони"
+        />
+        <ReportRow
+          to="/board"
+          icon={<MonitorIcon className="size-5" />}
+          title="Табло для холла"
+          value="что сейчас и что дальше в кабинетах"
+        />
+        {director && (
+          <ReportRow
+            to="/studio"
+            icon={<CalendarIcon className="size-5" />}
+            title="Студия"
+            value="часы работы и праздники"
+          />
+        )}
+      </Card>
+    </section>
   )
 }
 
@@ -276,6 +311,7 @@ function TeacherHome({ name, teacherId }: { name?: string; teacherId?: string })
         </p>
       </div>
       {teacherId && <TodayLessons teacherId={teacherId} />}
+      <RoomsLinks />
     </div>
   )
 }

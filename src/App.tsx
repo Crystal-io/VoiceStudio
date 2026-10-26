@@ -1,4 +1,4 @@
-import { lazy, type ComponentType, type ReactNode } from 'react'
+import { lazy, Suspense, type ComponentType, type ReactNode } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { ProfileProvider, useProfile } from '@/lib/profile'
@@ -37,6 +37,8 @@ const ReportsPage = lazyPage(() => import('@/pages/ReportsPage'), (m) => m.Repor
 const StudentsPage = lazyPage(() => import('@/pages/StudentsPage'), (m) => m.StudentsPage)
 const TeachersPage = lazyPage(() => import('@/pages/TeachersPage'), (m) => m.TeachersPage)
 const RoomsPage = lazyPage(() => import('@/pages/RoomsPage'), (m) => m.RoomsPage)
+const StudioPage = lazyPage(() => import('@/pages/StudioPage'), (m) => m.StudioPage)
+const BoardPage = lazyPage(() => import('@/pages/BoardPage'), (m) => m.BoardPage)
 
 function Splash() {
   return (
@@ -93,6 +95,15 @@ function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* табло для холла — во весь экран, без шапки и меню */}
+        <Route
+          path="board"
+          element={
+            <Suspense fallback={<Splash />}>
+              <BoardPage />
+            </Suspense>
+          }
+        />
         <Route element={<AppShell />}>
           <Route index element={<HomePage />} />
           <Route path="schedule" element={<SchedulePage />} />
@@ -118,6 +129,14 @@ function AppRoutes() {
             element={
               <DirectorOnly>
                 <ReportsPage />
+              </DirectorOnly>
+            }
+          />
+          <Route
+            path="studio"
+            element={
+              <DirectorOnly>
+                <StudioPage />
               </DirectorOnly>
             }
           />
