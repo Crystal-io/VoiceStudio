@@ -272,11 +272,25 @@ create policy rooms_write on public.rooms
 drop policy if exists students_select on public.students;
 create policy students_select on public.students
   for select to authenticated using (studio_id = public.current_studio_id());
+-- Добавлять учеников может любой в студии (педагог — прямо из формы занятия,
+-- только действующих), менять (в т. ч. архивировать) и удалять — директор.
 drop policy if exists students_write on public.students;
-create policy students_write on public.students
-  for all to authenticated
+drop policy if exists students_insert on public.students;
+create policy students_insert on public.students
+  for insert to authenticated
+  with check (
+    studio_id = public.current_studio_id()
+    and (public.is_director() or is_active)
+  );
+drop policy if exists students_update on public.students;
+create policy students_update on public.students
+  for update to authenticated
   using (studio_id = public.current_studio_id() and public.is_director())
   with check (studio_id = public.current_studio_id() and public.is_director());
+drop policy if exists students_delete on public.students;
+create policy students_delete on public.students
+  for delete to authenticated
+  using (studio_id = public.current_studio_id() and public.is_director());
 
 drop policy if exists groups_select on public.groups;
 create policy groups_select on public.groups

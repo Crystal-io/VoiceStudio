@@ -28,7 +28,7 @@ type View = 'day' | 'week' | 'rooms'
 
 export function SchedulePage() {
   const { profile } = useProfile()
-  const { dir, error: dirError } = useDirectory()
+  const { dir, error: dirError, reload: reloadDir } = useDirectory()
   const [params, setParams] = useSearchParams()
 
   const isDirector = profile?.role === 'director'
@@ -294,7 +294,11 @@ export function SchedulePage() {
           defaultStart={creating.start}
           defaultRoomId={creating.roomId}
           onClose={() => setCreating(null)}
-          onDone={changed}
+          onDone={async (d, studentAdded) => {
+            // новый ученик — иначе карточка занятия покажет просто «Ученик»
+            if (studentAdded) await reloadDir()
+            changed(d)
+          }}
         />
       )}
 
