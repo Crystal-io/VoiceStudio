@@ -242,3 +242,14 @@ export function TrashIcon(props: IconProps) {
     </svg>
   )
 }
+
+/** Картинка (выбор фото из галереи). */
+export function ImageIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="9" cy="10" r="1.8" />
+      <path d="m21 16-5-5-9 9" />
+    </svg>
+  )
+}

@@ -7,8 +7,8 @@ import { attendanceColumns, rosterOf } from '@/lib/attendance'
 import { lessonTitle, seriesColumns, teacherColor, toSeries } from '@/lib/schedule'
 import { Button, ErrorNote, Modal, Spinner } from '@/components/ui'
 import { AttendanceList } from '@/components/schedule/AttendanceList'
-import { ContactButtons } from '@/components/students/StudentCard'
-import { CalendarIcon, ClockIcon, DoorIcon, RepeatIcon, UserIcon } from '@/components/icons'
+import { ParentContact } from '@/components/students/StudentCard'
+import { CalendarIcon, ClockIcon, DoorIcon, RepeatIcon } from '@/components/icons'
 
 type Confirm = 'delete' | 'stop' | null
 
@@ -213,13 +213,8 @@ export function SessionSheet({
                 ? seriesText(series)
                 : 'Повторяющееся занятие'}
           </InfoRow>
-          {solo && (solo.parent_name || solo.parent_phone) && (
-            <InfoRow icon={<UserIcon className="size-5" />}>
-              {[solo.parent_name, solo.parent_phone].filter(Boolean).join(' · ')}
-            </InfoRow>
-          )}
         </ul>
-        {solo && <ContactButtons phone={solo.parent_phone} />}
+        {solo && (solo.parent_name || solo.parent_phone) && <ParentContact student={solo} />}
 
         {!cancelled &&
           (rows ? (

@@ -9,7 +9,7 @@ import { byDateTime } from '@/lib/reports'
 import { isGroupLesson, lessonTitle } from '@/lib/schedule'
 import { Button, ErrorNote, Modal } from '@/components/ui'
 import { PaidToggle } from '@/components/schedule/AttendanceList'
-import { ContactButtons } from '@/components/students/StudentCard'
+import { ParentContact } from '@/components/students/StudentCard'
 
 /**
  * Занятия ученика с отметками: статус посещения и оплата. Директор может
@@ -85,13 +85,8 @@ export function StudentMarksModal({
               )
             )}
           </p>
-          {(student.parent_name || student.parent_phone) && (
-            <p className="text-slate-700 dark:text-slate-200">
-              {[student.parent_name, student.parent_phone].filter(Boolean).join(' · ')}
-            </p>
-          )}
         </div>
-        <ContactButtons phone={student.parent_phone} />
+        {(student.parent_name || student.parent_phone) && <ParentContact student={student} />}
 
         {owed.length > 1 && (
           <Button

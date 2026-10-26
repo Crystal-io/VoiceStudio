@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
 import type { Profile, Student } from '@/lib/types'
@@ -21,9 +21,11 @@ import {
   CameraIcon,
   ChatIcon,
   CheckIcon,
+  ImageIcon,
   PencilIcon,
   PhoneIcon,
   TrashIcon,
+  UserIcon,
 } from '@/components/icons'
 
 /** Карточка ученика: просмотр, а у кого есть права — правка. Новая — сразу форма. */
@@ -122,15 +124,13 @@ function StudentView({
         </div>
       </div>
 
-      <ContactButtons phone={student.parent_phone} />
+      <ParentContact student={student} />
 
       <dl className="divide-y divide-slate-100 rounded-xl text-sm ring-1 ring-slate-200 dark:divide-slate-800 dark:ring-slate-800">
         <InfoRow label="Основной педагог">{teacher?.full_name ?? 'не указан'}</InfoRow>
         <InfoRow label="Дата рождения">
           {student.birth_date ? formatDate(student.birth_date) : 'не указана'}
         </InfoRow>
-        <InfoRow label="Родитель">{student.parent_name || 'не указан'}</InfoRow>
-        <InfoRow label="Телефон родителя">{student.parent_phone || 'не указан'}</InfoRow>
         <InfoRow label="В студии с">{formatDate(student.joined_on)}</InfoRow>
         <InfoRow label="Группы">{groups.length > 0 ? groups.join(', ') : 'нет'}</InfoRow>
         {student.notes && <InfoRow label="Заметки">{student.notes}</InfoRow>}
@@ -174,31 +174,55 @@ function InfoRow({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-/** «WhatsApp» и «Позвонить» по телефону родителя. */
-export function ContactButtons({ phone }: { phone: string | null }) {
-  const digits = phoneDigits(phone)
-  if (!digits) return null
+/**
+ * Контакт родителя: ФИО, телефон и кнопки «WhatsApp» / «Позвонить» —
+ * обе ведут на телефон родителя, а не ребёнка.
+ */
+export function ParentContact({
+  student,
+}: {
+  student: Pick<Student, 'parent_name' | 'parent_phone'>
+}) {
+  const digits = phoneDigits(student.parent_phone)
   const cls =
-    'inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold ring-1 transition'
+    'inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold ring-1 transition'
   return (
-    <div className="flex gap-2">
-      <a
-        href={whatsappUrl(digits)}
-        target="_blank"
-        rel="noreferrer"
-        className={`${cls} text-emerald-700 ring-emerald-200 hover:bg-emerald-50 dark:text-emerald-300 dark:ring-emerald-900 dark:hover:bg-emerald-950/40`}
-      >
-        <ChatIcon className="size-5" />
-        WhatsApp
-      </a>
-      <a
-        href={telUrl(digits)}
-        className={`${cls} text-brand-700 ring-brand-200 hover:bg-brand-50 dark:text-brand-300 dark:ring-brand-900 dark:hover:bg-brand-950/40`}
-      >
-        <PhoneIcon className="size-5" />
-        Позвонить
-      </a>
-    </div>
+    <section className="space-y-3 rounded-xl p-3 ring-1 ring-slate-200 dark:ring-slate-800">
+      <div className="flex items-center gap-3">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+          <UserIcon className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Родитель</p>
+          <p className="truncate font-medium">{student.parent_name || 'Имя не указано'}</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            {student.parent_phone || 'Телефон не указан'}
+          </p>
+        </div>
+      </div>
+      {digits && (
+        <div className="flex gap-2">
+          <a
+            href={whatsappUrl(digits)}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Написать родителю в WhatsApp"
+            className={`${cls} text-emerald-700 ring-emerald-200 hover:bg-emerald-50 dark:text-emerald-300 dark:ring-emerald-900 dark:hover:bg-emerald-950/40`}
+          >
+            <ChatIcon className="size-5" />
+            WhatsApp
+          </a>
+          <a
+            href={telUrl(digits)}
+            aria-label="Позвонить родителю"
+            className={`${cls} text-brand-700 ring-brand-200 hover:bg-brand-50 dark:text-brand-300 dark:ring-brand-900 dark:hover:bg-brand-950/40`}
+          >
+            <PhoneIcon className="size-5" />
+            Позвонить
+          </a>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -207,6 +231,9 @@ export function ContactButtons({ phone }: { phone: string | null }) {
 // ---------------------------------------------------------------------------
 
 type PhotoChange = { file: File; preview: string } | 'remove' | null
+
+const photoButton =
+  'inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-semibold text-brand-600 transition hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-950/40'
 
 /**
  * Поля карточки. Отдельно от модалки — чтобы завести ученика прямо из
@@ -239,7 +266,8 @@ export function StudentForm({
   const [photo, setPhoto] = useState<PhotoChange>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const fileInput = useRef<HTMLInputElement>(null)
+  const cameraInput = useRef<HTMLInputElement>(null)
+  const galleryInput = useRef<HTMLInputElement>(null)
 
   const savedPhotoUrl = usePhotoUrl(student?.photo_path ?? null)
   const previewUrl = photo === 'remove' ? null : photo ? photo.preview : savedPhotoUrl
@@ -255,9 +283,11 @@ export function StudentForm({
   const phoneBad = parentPhone.trim() !== '' && !phoneDigits(parentPhone)
   const invalid = !firstName.trim() || !lastName.trim() || phoneBad
 
-  function pickPhoto(file: File | undefined) {
-    if (!file) return
-    setPhoto({ file, preview: URL.createObjectURL(file) })
+  function onPhotoInput(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    // сброс — чтобы тот же снимок можно было выбрать ещё раз
+    e.target.value = ''
+    if (file) setPhoto({ file, preview: URL.createObjectURL(file) })
   }
 
   async function submit(e: FormEvent) {
@@ -315,44 +345,74 @@ export function StudentForm({
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <div className="flex items-center gap-4">
-        <span className="flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100 text-slate-400 dark:bg-slate-800">
-          {previewUrl ? (
-            <img src={previewUrl} alt="" className="size-full object-cover" />
-          ) : (
-            <CameraIcon className="size-8" />
-          )}
+      <div>
+        <span className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
+          Фото
         </span>
-        <div className="flex flex-col items-start gap-1.5">
-          <button
-            type="button"
-            onClick={() => fileInput.current?.click()}
-            className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-semibold text-brand-600 transition hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-950/40"
-          >
-            <CameraIcon className="size-4" />
-            {previewUrl ? 'Заменить фото' : 'Добавить фото'}
-          </button>
-          {previewUrl && (
+        <div className="flex items-center gap-4">
+          {/* нажатие на фото — сразу камера (на компьютере — выбор файла) */}
+          <div className="relative shrink-0">
             <button
               type="button"
-              onClick={() => setPhoto(student?.photo_path ? 'remove' : null)}
-              className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-rose-600 transition hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
+              onClick={() => cameraInput.current?.click()}
+              aria-label="Сделать фото"
+              className="flex size-24 items-center justify-center overflow-hidden rounded-full bg-slate-100 text-slate-400 ring-brand-500/40 transition hover:ring-4 dark:bg-slate-800"
             >
-              <TrashIcon className="size-4" />
-              Убрать фото
+              {previewUrl ? (
+                <img src={previewUrl} alt="" className="size-full object-cover" />
+              ) : (
+                <CameraIcon className="size-9" />
+              )}
             </button>
-          )}
-          <input
-            ref={fileInput}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              pickPhoto(e.target.files?.[0])
-              e.target.value = ''
-            }}
-          />
+            <span className="pointer-events-none absolute bottom-0 right-0 flex size-8 items-center justify-center rounded-full bg-brand-600 text-white ring-4 ring-white dark:ring-slate-900">
+              <CameraIcon className="size-4" />
+            </span>
+          </div>
+          <div className="flex flex-col items-start gap-1">
+            <button
+              type="button"
+              onClick={() => cameraInput.current?.click()}
+              className={photoButton}
+            >
+              <CameraIcon className="size-4" />
+              Сделать фото
+            </button>
+            <button
+              type="button"
+              onClick={() => galleryInput.current?.click()}
+              className={photoButton}
+            >
+              <ImageIcon className="size-4" />
+              Из галереи
+            </button>
+            {previewUrl && (
+              <button
+                type="button"
+                onClick={() => setPhoto(student?.photo_path ? 'remove' : null)}
+                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-rose-600 transition hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
+              >
+                <TrashIcon className="size-4" />
+                Убрать фото
+              </button>
+            )}
+          </div>
         </div>
+        {/* capture — телефон открывает камеру (основную: снимает педагог), без него — галерею */}
+        <input
+          ref={cameraInput}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={onPhotoInput}
+        />
+        <input
+          ref={galleryInput}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={onPhotoInput}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
