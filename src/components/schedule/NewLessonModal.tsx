@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
 import type { LessonType, Profile } from '@/lib/types'
@@ -37,8 +38,13 @@ export function NewLessonModal({
 }) {
   const isDirector = me.role === 'director'
   const activeTeachers = dir.profiles.filter((p) => p.is_active && p.role === 'teacher')
+  const students = dir.students.filter((s) => s.is_active)
+  const groups = dir.groups.filter((g) => g.is_active)
 
-  const [type, setType] = useState<LessonType>('individual')
+  // учеников нет, а группы есть — сразу открываем групповое
+  const [type, setType] = useState<LessonType>(
+    students.length === 0 && groups.length > 0 ? 'group' : 'individual',
+  )
   const [studentId, setStudentId] = useState('')
   const [groupId, setGroupId] = useState('')
   const [teacherId, setTeacherId] = useState(
@@ -56,8 +62,6 @@ export function NewLessonModal({
   const [error, setError] = useState<string | null>(null)
 
   const weekdays = pickedWeekdays ?? [weekdayOf(date)]
-  const students = dir.students.filter((s) => s.is_active)
-  const groups = dir.groups.filter((g) => g.is_active)
   const targetId = type === 'individual' ? studentId : groupId
 
   const query =
@@ -75,13 +79,29 @@ export function NewLessonModal({
       : null
   const guard = useConflictGuard(dir, query)
 
-  const invalid =
-    !targetId ||
-    !teacherId ||
-    !date ||
-    !start ||
-    !(duration > 0) ||
-    (repeat === 'weekly' && (weekdays.length === 0 || (!!endDate && endDate < date)))
+  // чего не хватает для сохранения — показывается под неактивной кнопкой
+  const missing = !targetId
+    ? type === 'individual'
+      ? students.length === 0
+        ? 'Учеников пока нет — выберите «Групповое»'
+        : 'Выберите ученика'
+      : groups.length === 0
+        ? 'Групп пока нет — выберите «Индивидуальное»'
+        : 'Выберите группу'
+    : !teacherId
+      ? 'Выберите педагога'
+      : !date
+        ? 'Укажите дату'
+        : !start
+          ? 'Укажите время начала'
+          : !(duration > 0)
+            ? 'Укажите длительность'
+            : repeat === 'weekly' && weekdays.length === 0
+              ? 'Выберите хотя бы один день недели'
+              : repeat === 'weekly' && !!endDate && endDate < date
+                ? 'Дата «до» раньше даты начала'
+                : null
+  const invalid = missing !== null
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -137,6 +157,14 @@ export function NewLessonModal({
   function fail(message: string) {
     setBusy(false)
     setError(message)
+  }
+
+  if (students.length === 0 && groups.length === 0) {
+    return (
+      <Modal title="Новое занятие" onClose={onClose}>
+        <NoStudents isDirector={isDirector} onClose={onClose} />
+      </Modal>
+    )
   }
 
   return (
@@ -253,11 +281,40 @@ export function NewLessonModal({
         {guard.conflicts && <ConflictNote conflicts={guard.conflicts} />}
         {error && <ErrorNote text={error} />}
 
-        <Button type="submit" disabled={busy || invalid} className="w-full">
-          {busy ? 'Сохраняем…' : guard.conflicts ? 'Сохранить всё равно' : 'Добавить занятие'}
-        </Button>
+        <div className="space-y-2">
+          <Button type="submit" disabled={busy || invalid} className="w-full">
+            {busy ? 'Сохраняем…' : guard.conflicts ? 'Сохранить всё равно' : 'Добавить занятие'}
+          </Button>
+          {missing && !busy && (
+            <p className="text-center text-sm text-slate-500 dark:text-slate-400">{missing}</p>
+          )}
+        </div>
       </form>
     </Modal>
+  )
+}
+
+/** В студии ещё нет ни учеников, ни групп — занятие ставить не на кого. */
+function NoStudents({ isDirector, onClose }: { isDirector: boolean; onClose: () => void }) {
+  const navigate = useNavigate()
+  return (
+    <div className="space-y-4">
+      <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-300">
+        Занятие ставится ученику или группе, а в студии их пока нет.{' '}
+        {isDirector
+          ? 'Добавьте учеников в разделе «Ученики» — и возвращайтесь сюда.'
+          : 'Учеников и группы добавляет директор в разделе «Ученики» — после этого здесь можно будет поставить занятие.'}
+      </p>
+      {isDirector ? (
+        <Button type="button" className="w-full" onClick={() => navigate('/students')}>
+          Перейти в «Ученики»
+        </Button>
+      ) : (
+        <Button type="button" variant="ghost" className="w-full" onClick={onClose}>
+          Понятно
+        </Button>
+      )}
+    </div>
   )
 }
 
