@@ -29,14 +29,26 @@ export type Room = {
   created_at: string
 }
 
+/** Карточка ученика. full_name база собирает сама из имени и фамилии. */
 export type Student = {
   id: string
   studio_id: string
+  first_name: string
+  last_name: string
   full_name: string
   birth_date: string | null
-  parent_contact: string | null
+  main_teacher_id: string | null
+  /** ФИО родителя */
+  parent_name: string | null
+  /** телефон родителя (WhatsApp) */
+  parent_phone: string | null
+  /** файл в хранилище student-photos */
+  photo_path: string | null
+  /** в студии с */
+  joined_on: string
   notes: string | null
   is_active: boolean
+  /** карточка создана */
   created_at: string
 }
 
@@ -53,19 +65,20 @@ export type GroupMember = {
   student_id: string
 }
 
-export type LessonType = 'individual' | 'group'
-
 export type SessionStatus = 'scheduled' | 'done' | 'cancelled'
 
-/** Шаблон повторяющегося занятия: «каждый вторник 15:00». */
+/**
+ * Шаблон повторяющегося занятия: «каждый вторник 15:00».
+ * Состав: группа (необязательно) и/или отдельные ученики.
+ */
 export type LessonSeries = {
   id: string
   studio_id: string
   teacher_id: string
   room_id: string | null
-  type: LessonType
-  student_id: string | null
   group_id: string | null
+  /** ученики серии, кроме группы */
+  student_ids: string[]
   weekday: number
   start_time: string
   duration_min: number
@@ -75,16 +88,19 @@ export type LessonSeries = {
   created_at: string
 }
 
-/** Конкретное занятие в календаре (разовое или из серии). */
+/**
+ * Конкретное занятие в календаре (разовое или из серии). Состав — нынешние
+ * ученики группы + student_ids + все, у кого уже есть отметка.
+ */
 export type Session = {
   id: string
   studio_id: string
   series_id: string | null
   teacher_id: string
   room_id: string | null
-  type: LessonType
-  student_id: string | null
   group_id: string | null
+  /** ученики занятия, кроме группы */
+  student_ids: string[]
   date: string
   /** исходная дата вхождения серии; отличается от date, если занятие перенесли */
   occurrence_date: string | null

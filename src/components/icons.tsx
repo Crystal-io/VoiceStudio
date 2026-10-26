@@ -214,3 +214,31 @@ export function WalletIcon(props: IconProps) {
     </svg>
   )
 }
+
+export function CameraIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" />
+      <circle cx="12" cy="13" r="3.5" />
+    </svg>
+  )
+}
+
+/** Сообщение в мессенджере (кнопка «WhatsApp»). */
+export function ChatIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M20 11.5a8 8 0 0 1-11.8 7L4 20l1.5-4.2A8 8 0 1 1 20 11.5Z" />
+      <path d="M9 10.5h6M9 13.5h4" />
+    </svg>
+  )
+}
+
+export function TrashIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 7h16M10 11v6M14 11v6" />
+      <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+    </svg>
+  )
+}

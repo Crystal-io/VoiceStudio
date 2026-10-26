@@ -84,6 +84,13 @@ export function formatDayMonth(iso: string): string {
   return dayMonth.format(fromISO(iso))
 }
 
+const fullDate = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+
+/** «29 сентября 2026 г.» → без «г.»: «29 сентября 2026» */
+export function formatDate(iso: string): string {
+  return fullDate.format(fromISO(iso.slice(0, 10))).replace(/\s*г\.$/, '')
+}
+
 /** «29 сент.» */
 export function formatDayShort(iso: string): string {
   return shortDay.format(fromISO(iso))

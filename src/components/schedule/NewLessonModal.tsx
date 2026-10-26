@@ -1,11 +1,12 @@
 import { useState, type FormEvent } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
-import type { LessonType, Profile } from '@/lib/types'
+import type { Profile } from '@/lib/types'
 import { weekdayOf } from '@/lib/dates'
+import { groupMemberIds } from '@/lib/attendance'
 import { candidateDates, horizonFrom } from '@/lib/schedule'
 import { useConflictGuard } from '@/lib/useConflictGuard'
-import { Button, ErrorNote, Field, Modal, Segmented, SelectField } from '@/components/ui'
+import { Button, ErrorNote, Field, Modal, Segmented } from '@/components/ui'
 import {
   ConflictNote,
   DurationPicker,
@@ -13,15 +14,18 @@ import {
   TeacherSelect,
   WeekdayPicker,
 } from '@/components/schedule/fields'
+import { GroupField, StudentsField } from '@/components/students/RosterFields'
+import { StudentPicker } from '@/components/students/StudentPicker'
+import { StudentForm } from '@/components/students/StudentCard'
 
 type Repeat = 'weekly' | 'once'
+/** что сейчас на экране модалки: форма, выбор учеников или новая карточка */
+type View = 'form' | 'pick' | 'newStudent'
 
-/** значение пункта «+ Новый ученик» в списке учеников */
-const NEW_STUDENT = '__new'
-
-const normName = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase()
-
-/** Новое занятие: разовое или повторяющееся каждую неделю. */
+/**
+ * Новое занятие: разовое или повторяющееся каждую неделю. Состав — группа,
+ * ученики из списка или группа и ещё ученики.
+ */
 export function NewLessonModal({
   dir,
   me,
@@ -30,6 +34,7 @@ export function NewLessonModal({
   defaultRoomId,
   onClose,
   onDone,
+  reloadDir,
 }: {
   dir: Directory
   me: Profile
@@ -38,25 +43,17 @@ export function NewLessonModal({
   defaultStart?: string
   defaultRoomId?: string | null
   onClose: () => void
-  /** studentAdded — по ходу добавлен новый ученик (справочник устарел) */
-  onDone: (date: string, studentAdded: boolean) => void
+  onDone: (date: string) => void
+  /** перечитать справочник — после новой карточки ученика */
+  reloadDir: () => Promise<void>
 }) {
   const isDirector = me.role === 'director'
   const activeTeachers = dir.profiles.filter((p) => p.is_active && p.role === 'teacher')
   const students = dir.students.filter((s) => s.is_active)
-  const groups = dir.groups.filter((g) => g.is_active)
 
-  // учеников нет, а группы есть — сразу открываем групповое
-  const [type, setType] = useState<LessonType>(
-    students.length === 0 && groups.length > 0 ? 'group' : 'individual',
-  )
-  const [studentId, setStudentId] = useState('')
-  // новый ученик вводится прямо здесь; без учеников в студии — сразу так
-  const [newName, setNewName] = useState('')
-  const [newContact, setNewContact] = useState('')
-  // уже созданный при прошлой попытке — чтобы повтор не завёл дубль
-  const [created, setCreated] = useState<{ id: string; name: string } | null>(null)
+  const [view, setView] = useState<View>('form')
   const [groupId, setGroupId] = useState('')
+  const [picked, setPicked] = useState<Set<string>>(new Set())
   const [teacherId, setTeacherId] = useState(
     !isDirector ? me.id : activeTeachers.length === 1 ? activeTeachers[0].id : '',
   )
@@ -72,14 +69,9 @@ export function NewLessonModal({
   const [error, setError] = useState<string | null>(null)
 
   const weekdays = pickedWeekdays ?? [weekdayOf(date)]
-  const addingStudent =
-    type === 'individual' && (students.length === 0 || studentId === NEW_STUDENT)
-  const hasTarget =
-    type === 'individual' ? (addingStudent ? !!newName.trim() : !!studentId) : !!groupId
-  // такое имя уже есть — предлагаем выбрать, а не заводить второго
-  const sameName = addingStudent
-    ? dir.students.find((s) => newName.trim() && normName(s.full_name) === normName(newName))
-    : undefined
+  const members = groupMemberIds(groupId || null, dir)
+  // кто и так в группе, отдельно не записываем
+  const extras = [...picked].filter((id) => !members.includes(id))
 
   const query =
     teacherId && date && start && duration > 0
@@ -97,27 +89,22 @@ export function NewLessonModal({
   const guard = useConflictGuard(dir, query)
 
   // чего не хватает для сохранения — показывается под неактивной кнопкой
-  const missing = !hasTarget
-    ? type === 'individual'
-      ? addingStudent
-        ? 'Укажите имя ученика'
-        : 'Выберите ученика'
-      : groups.length === 0
-        ? 'Групп пока нет — выберите «Индивидуальное»'
-        : 'Выберите группу'
-    : !teacherId
-      ? 'Выберите педагога'
-      : !date
-        ? 'Укажите дату'
-        : !start
-          ? 'Укажите время начала'
-          : !(duration > 0)
-            ? 'Укажите длительность'
-            : repeat === 'weekly' && weekdays.length === 0
-              ? 'Выберите хотя бы один день недели'
-              : repeat === 'weekly' && !!endDate && endDate < date
-                ? 'Дата «до» раньше даты начала'
-                : null
+  const missing =
+    !groupId && extras.length === 0
+      ? 'Выберите группу или учеников'
+      : !teacherId
+        ? 'Выберите педагога'
+        : !date
+          ? 'Укажите дату'
+          : !start
+            ? 'Укажите время начала'
+            : !(duration > 0)
+              ? 'Укажите длительность'
+              : repeat === 'weekly' && weekdays.length === 0
+                ? 'Выберите хотя бы один день недели'
+                : repeat === 'weekly' && !!endDate && endDate < date
+                  ? 'Дата «до» раньше даты начала'
+                  : null
   const invalid = missing !== null
 
   async function submit(e: FormEvent) {
@@ -133,136 +120,77 @@ export function NewLessonModal({
       return
     }
 
-    // ученика заводим только после проверки пересечений: иначе «передумал
-    // из-за пересечения» оставил бы его в студии
-    let targetStudent = studentId
-    if (addingStudent) {
-      const name = newName.trim().replace(/\s+/g, ' ')
-      if (created && created.name === name) {
-        targetStudent = created.id
-      } else {
-        const { data, error } = await supabase
-          .from('students')
-          .insert({
-            studio_id: me.studio_id,
-            full_name: name,
-            parent_contact: newContact.trim() || null,
-          })
-          .select('id')
-          .single()
-        if (error) return fail(error.message)
-        targetStudent = data.id as string
-        setCreated({ id: targetStudent, name })
-      }
+    const { error } = await supabase.rpc('create_lesson', {
+      p_teacher: teacherId,
+      p_room: roomId || null,
+      p_group: groupId || null,
+      p_students: extras,
+      p_date: date,
+      p_start: start,
+      p_duration: duration,
+      p_weekdays: repeat === 'weekly' ? weekdays : null,
+      p_end: repeat === 'weekly' ? endDate || null : null,
+      p_until: horizonFrom(date),
+    })
+    if (error) {
+      setBusy(false)
+      setError(error.message)
+      return
     }
-
-    const base = {
-      studio_id: me.studio_id,
-      teacher_id: teacherId,
-      room_id: roomId || null,
-      type,
-      student_id: type === 'individual' ? targetStudent : null,
-      group_id: type === 'group' ? groupId : null,
-      start_time: start,
-      duration_min: duration,
-    }
-
-    if (repeat === 'once') {
-      const { error } = await supabase.from('sessions').insert({ ...base, date })
-      if (error) return fail(error.message)
-    } else {
-      const { data, error } = await supabase
-        .from('lesson_series')
-        .insert(
-          weekdays.map((weekday) => ({
-            ...base,
-            weekday,
-            start_date: date,
-            end_date: endDate || null,
-          })),
-        )
-        .select('id')
-      if (error) return fail(error.message)
-      for (const row of (data as { id: string }[]) ?? []) {
-        const { error } = await supabase.rpc('generate_series_sessions', {
-          p_series: row.id,
-          p_until: horizonFrom(date),
-        })
-        if (error) return fail(error.message)
-      }
-    }
-    onDone(date, addingStudent || created !== null)
+    onDone(date)
   }
 
-  function fail(message: string) {
-    setBusy(false)
-    setError(message)
+  if (view === 'pick') {
+    return (
+      <Modal title="Ученики на занятии" onClose={() => setView('form')}>
+        <StudentPicker
+          students={students}
+          initial={new Set(extras)}
+          locked={new Set(members)}
+          myId={isDirector ? undefined : me.id}
+          onDone={(selected) => {
+            setPicked(selected)
+            setView('form')
+          }}
+          onCancel={() => setView('form')}
+          onCreate={() => setView('newStudent')}
+        />
+      </Modal>
+    )
+  }
+
+  if (view === 'newStudent') {
+    return (
+      <Modal title="Новый ученик" onClose={() => setView('pick')}>
+        <StudentForm
+          student={null}
+          dir={dir}
+          me={me}
+          onSaved={async (id) => {
+            await reloadDir()
+            setPicked((prev) => new Set(prev).add(id))
+            setView('form')
+          }}
+        />
+      </Modal>
+    )
   }
 
   return (
     <Modal title="Новое занятие" onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
-        <Segmented<LessonType>
-          value={type}
-          onChange={setType}
-          options={[
-            { value: 'individual', label: 'Индивидуальное' },
-            { value: 'group', label: 'Групповое' },
-          ]}
+        <GroupField dir={dir} value={groupId} onChange={setGroupId} />
+        <StudentsField
+          dir={dir}
+          label={groupId ? 'Ещё ученики (необязательно)' : 'Ученики'}
+          ids={extras}
+          onRemove={(id) => setPicked((prev) => {
+            const next = new Set(prev)
+            next.delete(id)
+            return next
+          })}
+          onAdd={() => setView('pick')}
         />
-
-        {type === 'individual' ? (
-          <div className="space-y-3">
-            {students.length > 0 && (
-              <SelectField
-                label="Ученик"
-                value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
-                required
-              >
-                <option value="" disabled>
-                  Выберите ученика
-                </option>
-                {students.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.full_name}
-                  </option>
-                ))}
-                <option value={NEW_STUDENT}>+ Новый ученик</option>
-              </SelectField>
-            )}
-            {addingStudent && (
-              <NewStudentFields
-                first={students.length === 0}
-                isDirector={isDirector}
-                name={newName}
-                contact={newContact}
-                onName={setNewName}
-                onContact={setNewContact}
-                sameName={sameName ?? null}
-                onPick={(id) => setStudentId(id)}
-              />
-            )}
-          </div>
-        ) : groups.length === 0 ? (
-          <EmptyHint text="Пока нет групп — директор создаёт их в разделе «Ученики» → «Группы»." />
-        ) : (
-          <SelectField
-            label="Группа"
-            value={groupId}
-            onChange={(e) => setGroupId(e.target.value)}
-            required
-          >
-            <option value="" disabled>
-              Выберите группу
-            </option>
-            {groups.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name}
-              </option>
-            ))}
-          </SelectField>
-        )}
 
         <Segmented<Repeat>
           value={repeat}
@@ -336,82 +264,5 @@ export function NewLessonModal({
         </div>
       </form>
     </Modal>
-  )
-}
-
-/** Новый ученик прямо в форме занятия — заводится вместе с занятием. */
-function NewStudentFields({
-  first,
-  isDirector,
-  name,
-  contact,
-  onName,
-  onContact,
-  sameName,
-  onPick,
-}: {
-  /** в студии ещё нет учеников */
-  first: boolean
-  isDirector: boolean
-  name: string
-  contact: string
-  onName: (v: string) => void
-  onContact: (v: string) => void
-  /** ученик с таким же именем, если есть */
-  sameName: { id: string; full_name: string; is_active: boolean } | null
-  onPick: (id: string) => void
-}) {
-  return (
-    <div className="space-y-3 rounded-xl p-3 ring-1 ring-slate-200 dark:ring-slate-700">
-      <Field
-        label={first ? 'Ученик' : 'Новый ученик'}
-        value={name}
-        onChange={(e) => onName(e.target.value)}
-        placeholder="Маша Петрова"
-        autoFocus={!first}
-        required
-      />
-      {sameName &&
-        (sameName.is_active ? (
-          <div className="flex items-center justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-            <span>«{sameName.full_name}» уже есть в студии.</span>
-            <button
-              type="button"
-              onClick={() => onPick(sameName.id)}
-              className="shrink-0 font-semibold text-brand-700 hover:underline dark:text-brand-300"
-            >
-              Выбрать
-            </button>
-          </div>
-        ) : (
-          <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-            «{sameName.full_name}» есть в архиве —{' '}
-            {isDirector
-              ? 'карточку можно вернуть в разделе «Ученики».'
-              : 'вернуть карточку может директор, или добавьте заново.'}
-          </p>
-        ))}
-      <Field
-        label="Контакт родителя"
-        value={contact}
-        onChange={(e) => onContact(e.target.value)}
-        placeholder="Мама Ольга, +7 900 123-45-67"
-        hint="Необязательно"
-      />
-      <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-        {first ? 'Учеников в студии пока нет — этот будет первым. ' : ''}
-        {isDirector
-          ? 'Ученик появится в разделе «Ученики» вместе с занятием.'
-          : 'Ученик добавится в студию вместе с занятием. Исправить карточку или убрать в архив сможет директор.'}
-      </p>
-    </div>
-  )
-}
-
-function EmptyHint({ text }: { text: string }) {
-  return (
-    <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
-      {text}
-    </p>
   )
 }

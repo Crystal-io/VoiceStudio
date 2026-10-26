@@ -294,11 +294,8 @@ export function SchedulePage() {
           defaultStart={creating.start}
           defaultRoomId={creating.roomId}
           onClose={() => setCreating(null)}
-          onDone={async (d, studentAdded) => {
-            // новый ученик — иначе карточка занятия покажет просто «Ученик»
-            if (studentAdded) await reloadDir()
-            changed(d)
-          }}
+          onDone={changed}
+          reloadDir={reloadDir}
         />
       )}
 
@@ -310,6 +307,7 @@ export function SchedulePage() {
           me={profile}
           onClose={() => setSelected(null)}
           onChanged={changed}
+          reloadDir={reloadDir}
         />
       )}
     </div>

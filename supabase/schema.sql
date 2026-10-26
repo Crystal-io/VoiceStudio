@@ -94,16 +94,24 @@ create table if not exists public.rooms (
 );
 create index if not exists rooms_studio_idx on public.rooms(studio_id);
 
--- Ученики (дети)
+-- Ученики (дети) — карточка: имя и фамилия, дата рождения, основной педагог,
+-- родитель и его телефон (WhatsApp), фото, когда пришёл в студию.
+-- full_name вычисляется из имени и фамилии — по нему ищут и сортируют.
 create table if not exists public.students (
-  id             uuid primary key default gen_random_uuid(),
-  studio_id      uuid not null references public.studios(id) on delete cascade,
-  full_name      text not null,
-  birth_date     date,
-  parent_contact text,
-  notes          text,
-  is_active      boolean not null default true,
-  created_at     timestamptz not null default now()
+  id              uuid primary key default gen_random_uuid(),
+  studio_id       uuid not null references public.studios(id) on delete cascade,
+  first_name      text not null,
+  last_name       text not null default '',
+  full_name       text generated always as (btrim(first_name || ' ' || last_name)) stored,
+  birth_date      date,
+  main_teacher_id uuid references public.profiles(id) on delete set null,
+  parent_name     text,                   -- ФИО родителя
+  parent_phone    text,                   -- телефон родителя (WhatsApp)
+  photo_path      text,                   -- файл в хранилище student-photos
+  joined_on       date not null default current_date,  -- в студии с
+  notes           text,
+  is_active       boolean not null default true,
+  created_at      timestamptz not null default now()   -- карточка создана
 );
 create index if not exists students_studio_idx on public.students(studio_id);
 
@@ -130,40 +138,34 @@ create table if not exists public.group_members (
 );
 create index if not exists group_members_student_idx on public.group_members(student_id);
 
--- Шаблон повторяющегося занятия («каждый вторник 15:00»)
+-- Шаблон повторяющегося занятия («каждый вторник 15:00»).
+-- Состав: группа (необязательно) и/или ученики из series_students (M7).
 create table if not exists public.lesson_series (
   id            uuid primary key default gen_random_uuid(),
   studio_id     uuid not null references public.studios(id) on delete cascade,
   teacher_id    uuid not null references public.profiles(id) on delete cascade,
   room_id       uuid references public.rooms(id) on delete set null,
-  type          text not null check (type in ('individual','group')),
-  student_id    uuid references public.students(id) on delete cascade,  -- для индивидуальных
-  group_id      uuid references public.groups(id) on delete cascade,    -- для групповых
+  group_id      uuid references public.groups(id) on delete cascade,
   weekday       int  not null check (weekday between 0 and 6),           -- 0=Пн … 6=Вс
   start_time    time not null,
   duration_min  int  not null default 45 check (duration_min > 0),
   start_date    date not null,
   end_date      date,                                                    -- null = бессрочно
   is_active     boolean not null default true,
-  created_at    timestamptz not null default now(),
-  -- у индивидуального занятия должен быть ученик, у группового — группа
-  constraint series_target_ck check (
-    (type = 'individual' and student_id is not null and group_id is null) or
-    (type = 'group'      and group_id  is not null and student_id is null)
-  )
+  created_at    timestamptz not null default now()
 );
 create index if not exists lesson_series_studio_idx  on public.lesson_series(studio_id);
 create index if not exists lesson_series_teacher_idx on public.lesson_series(teacher_id);
 
 -- Конкретное занятие (экземпляр). Может быть порождён шаблоном или разовым.
+-- Состав: нынешние ученики группы (если она есть) + ученики из
+-- session_students + все, у кого на занятии уже есть отметка.
 create table if not exists public.sessions (
   id            uuid primary key default gen_random_uuid(),
   studio_id     uuid not null references public.studios(id) on delete cascade,
   series_id     uuid references public.lesson_series(id) on delete set null,
   teacher_id    uuid not null references public.profiles(id) on delete cascade,
   room_id       uuid references public.rooms(id) on delete set null,
-  type          text not null check (type in ('individual','group')),
-  student_id    uuid references public.students(id) on delete cascade,
   group_id      uuid references public.groups(id) on delete cascade,
   date          date not null,
   start_time    time not null,
@@ -171,15 +173,30 @@ create table if not exists public.sessions (
   status        text not null default 'scheduled'
                   check (status in ('scheduled','done','cancelled')),
   note          text,
-  created_at    timestamptz not null default now(),
-  constraint session_target_ck check (
-    (type = 'individual' and student_id is not null and group_id is null) or
-    (type = 'group'      and group_id  is not null and student_id is null)
-  )
+  created_at    timestamptz not null default now()
 );
 create index if not exists sessions_studio_date_idx  on public.sessions(studio_id, date);
 create index if not exists sessions_teacher_date_idx on public.sessions(teacher_id, date);
 create index if not exists sessions_room_date_idx    on public.sessions(room_id, date);
+
+-- Ученики серии (кроме группы) — копируются в каждое новое занятие серии.
+create table if not exists public.series_students (
+  series_id   uuid not null references public.lesson_series(id) on delete cascade,
+  student_id  uuid not null references public.students(id) on delete cascade,
+  studio_id   uuid not null references public.studios(id) on delete cascade,
+  primary key (series_id, student_id)
+);
+create index if not exists series_students_student_idx on public.series_students(student_id);
+
+-- Ученики конкретного занятия (кроме группы): индивидуальное — один,
+-- «несколько учеников» или «группа и ещё кто-то» — несколько.
+create table if not exists public.session_students (
+  session_id  uuid not null references public.sessions(id) on delete cascade,
+  student_id  uuid not null references public.students(id) on delete cascade,
+  studio_id   uuid not null references public.studios(id) on delete cascade,
+  primary key (session_id, student_id)
+);
+create index if not exists session_students_student_idx on public.session_students(student_id);
 
 -- Посещаемость: статус ученика на конкретном занятии.
 -- Оплата хранится здесь же (каждый ребёнок платит за своё занятие):
@@ -204,6 +221,69 @@ alter table public.attendance add column if not exists is_paid boolean not null 
 alter table public.attendance add column if not exists amount  numeric(10,2);
 
 -- ---------------------------------------------------------------------------
+-- M7: перевод уже существующей базы на карточки учеников и состав занятий
+-- (на новой базе таблицы сразу создаются в нужном виде — блоки ничего не делают)
+-- ---------------------------------------------------------------------------
+
+do $$
+begin
+  -- full_name → имя + фамилия; full_name теперь вычисляется из них
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'students'
+               and column_name = 'full_name' and is_generated = 'NEVER') then
+    alter table public.students add column if not exists first_name text;
+    alter table public.students add column if not exists last_name text not null default '';
+    update public.students
+    set first_name = split_part(btrim(full_name), ' ', 1),
+        last_name  = btrim(substr(btrim(full_name), length(split_part(btrim(full_name), ' ', 1)) + 1));
+    alter table public.students alter column first_name set not null;
+    alter table public.students drop column full_name;
+    alter table public.students add column full_name text
+      generated always as (btrim(first_name || ' ' || last_name)) stored;
+  end if;
+  -- «контакт родителя» одной строкой → ФИО родителя (телефон — отдельным полем)
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'students'
+               and column_name = 'parent_contact') then
+    alter table public.students add column if not exists parent_name text;
+    update public.students set parent_name = coalesce(parent_name, parent_contact);
+    alter table public.students drop column parent_contact;
+  end if;
+end;
+$$;
+
+alter table public.students add column if not exists main_teacher_id uuid
+  references public.profiles(id) on delete set null;
+alter table public.students add column if not exists parent_name text;
+alter table public.students add column if not exists parent_phone text;
+alter table public.students add column if not exists photo_path text;
+alter table public.students add column if not exists joined_on date not null default current_date;
+create index if not exists students_main_teacher_idx on public.students(main_teacher_id);
+
+-- «один ученик или одна группа» → группа и/или ученики: ученик индивидуальных
+-- занятий переезжает в состав, поля type и student_id уходят
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'sessions'
+               and column_name = 'student_id') then
+    insert into public.series_students (series_id, student_id, studio_id)
+    select id, student_id, studio_id from public.lesson_series where student_id is not null
+    on conflict do nothing;
+    insert into public.session_students (session_id, student_id, studio_id)
+    select id, student_id, studio_id from public.sessions where student_id is not null
+    on conflict do nothing;
+    drop trigger if exists lesson_series_refs on public.lesson_series;
+    drop trigger if exists sessions_refs on public.sessions;
+    alter table public.lesson_series drop constraint if exists series_target_ck;
+    alter table public.sessions drop constraint if exists session_target_ck;
+    alter table public.lesson_series drop column student_id, drop column type;
+    alter table public.sessions drop column student_id, drop column type;
+  end if;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- RLS: включаем на всех таблицах и описываем политики
 -- ---------------------------------------------------------------------------
 
@@ -217,6 +297,8 @@ alter table public.group_members enable row level security;
 alter table public.lesson_series enable row level security;
 alter table public.sessions      enable row level security;
 alter table public.attendance    enable row level security;
+alter table public.series_students  enable row level security;
+alter table public.session_students enable row level security;
 
 -- studios: видно свою студию; изменять может только директор.
 drop policy if exists studios_select on public.studios;
@@ -259,7 +341,7 @@ create policy invitations_admin_all on public.invitations
 -- Универсальный шаблон для справочников и расписания:
 --   читать — всем в студии; менять — директору;
 --   занятия/посещаемость дополнительно может вести педагог по своим.
--- rooms, students, groups, group_members: чтение всем в студии, запись директору.
+-- rooms: чтение всем в студии, запись директору; students и groups — ниже.
 drop policy if exists rooms_select on public.rooms;
 create policy rooms_select on public.rooms
   for select to authenticated using (studio_id = public.current_studio_id());
@@ -272,8 +354,9 @@ create policy rooms_write on public.rooms
 drop policy if exists students_select on public.students;
 create policy students_select on public.students
   for select to authenticated using (studio_id = public.current_studio_id());
--- Добавлять учеников может любой в студии (педагог — прямо из формы занятия,
--- только действующих), менять (в т. ч. архивировать) и удалять — директор.
+-- Карточки учеников: заводит любой в студии (педагог — только действующих),
+-- правит директор или основной педагог ученика (педагог не может убрать в
+-- архив и передать ученика другому), удаляет — директор.
 drop policy if exists students_write on public.students;
 drop policy if exists students_insert on public.students;
 create policy students_insert on public.students
@@ -285,21 +368,41 @@ create policy students_insert on public.students
 drop policy if exists students_update on public.students;
 create policy students_update on public.students
   for update to authenticated
-  using (studio_id = public.current_studio_id() and public.is_director())
-  with check (studio_id = public.current_studio_id() and public.is_director());
+  using (
+    studio_id = public.current_studio_id()
+    and (public.is_director() or main_teacher_id = auth.uid())
+  )
+  with check (
+    studio_id = public.current_studio_id()
+    and (public.is_director() or (main_teacher_id = auth.uid() and is_active))
+  );
 drop policy if exists students_delete on public.students;
 create policy students_delete on public.students
   for delete to authenticated
   using (studio_id = public.current_studio_id() and public.is_director());
 
+-- Группы: создаёт, переименовывает и комплектует любой в студии; убрать в
+-- архив (и вернуть) и удалить — директор.
 drop policy if exists groups_select on public.groups;
 create policy groups_select on public.groups
   for select to authenticated using (studio_id = public.current_studio_id());
 drop policy if exists groups_write on public.groups;
-create policy groups_write on public.groups
-  for all to authenticated
-  using (studio_id = public.current_studio_id() and public.is_director())
-  with check (studio_id = public.current_studio_id() and public.is_director());
+drop policy if exists groups_insert on public.groups;
+create policy groups_insert on public.groups
+  for insert to authenticated
+  with check (
+    studio_id = public.current_studio_id()
+    and (public.is_director() or is_active)
+  );
+drop policy if exists groups_update on public.groups;
+create policy groups_update on public.groups
+  for update to authenticated
+  using (studio_id = public.current_studio_id() and (public.is_director() or is_active))
+  with check (studio_id = public.current_studio_id() and (public.is_director() or is_active));
+drop policy if exists groups_delete on public.groups;
+create policy groups_delete on public.groups
+  for delete to authenticated
+  using (studio_id = public.current_studio_id() and public.is_director());
 
 drop policy if exists group_members_select on public.group_members;
 create policy group_members_select on public.group_members
@@ -307,8 +410,8 @@ create policy group_members_select on public.group_members
 drop policy if exists group_members_write on public.group_members;
 create policy group_members_write on public.group_members
   for all to authenticated
-  using (studio_id = public.current_studio_id() and public.is_director())
-  with check (studio_id = public.current_studio_id() and public.is_director());
+  using (studio_id = public.current_studio_id())
+  with check (studio_id = public.current_studio_id());
 
 -- lesson_series и sessions: читать всем в студии; вести может директор
 -- (любые) или педагог — только свои (teacher_id = auth.uid()).
@@ -340,6 +443,46 @@ create policy sessions_write on public.sessions
   with check (
     studio_id = public.current_studio_id()
     and (public.is_director() or teacher_id = auth.uid())
+  );
+
+-- Состав серий и занятий: как сами серии и занятия — директор или педагог,
+-- который их ведёт.
+drop policy if exists series_students_select on public.series_students;
+create policy series_students_select on public.series_students
+  for select to authenticated using (studio_id = public.current_studio_id());
+drop policy if exists series_students_write on public.series_students;
+create policy series_students_write on public.series_students
+  for all to authenticated
+  using (
+    studio_id = public.current_studio_id()
+    and (public.is_director() or exists (
+      select 1 from public.lesson_series ls
+      where ls.id = series_students.series_id and ls.teacher_id = auth.uid()))
+  )
+  with check (
+    studio_id = public.current_studio_id()
+    and (public.is_director() or exists (
+      select 1 from public.lesson_series ls
+      where ls.id = series_students.series_id and ls.teacher_id = auth.uid()))
+  );
+
+drop policy if exists session_students_select on public.session_students;
+create policy session_students_select on public.session_students
+  for select to authenticated using (studio_id = public.current_studio_id());
+drop policy if exists session_students_write on public.session_students;
+create policy session_students_write on public.session_students
+  for all to authenticated
+  using (
+    studio_id = public.current_studio_id()
+    and (public.is_director() or exists (
+      select 1 from public.sessions s
+      where s.id = session_students.session_id and s.teacher_id = auth.uid()))
+  )
+  with check (
+    studio_id = public.current_studio_id()
+    and (public.is_director() or exists (
+      select 1 from public.sessions s
+      where s.id = session_students.session_id and s.teacher_id = auth.uid()))
   );
 
 -- attendance: читать всем в студии; отмечать может директор или педагог,
@@ -475,7 +618,8 @@ alter table public.sessions add column if not exists occurrence_date date;
 create unique index if not exists sessions_series_occurrence_uidx
   on public.sessions(series_id, occurrence_date) where series_id is not null;
 
--- Педагог, кабинет, ученик и группа занятия должны быть из той же студии.
+-- Педагог, кабинет и группа занятия должны быть из той же студии
+-- (ученики состава проверяются в session_students / series_students).
 create or replace function public.check_schedule_refs()
 returns trigger
 language plpgsql
@@ -490,10 +634,6 @@ begin
        select 1 from public.rooms where id = new.room_id and studio_id = new.studio_id) then
     raise exception 'Кабинет не из этой студии';
   end if;
-  if new.student_id is not null and not exists (
-       select 1 from public.students where id = new.student_id and studio_id = new.studio_id) then
-    raise exception 'Ученик не из этой студии';
-  end if;
   if new.group_id is not null and not exists (
        select 1 from public.groups where id = new.group_id and studio_id = new.studio_id) then
     raise exception 'Группа не из этой студии';
@@ -504,18 +644,20 @@ $$;
 
 drop trigger if exists lesson_series_refs on public.lesson_series;
 create trigger lesson_series_refs
-  before insert or update of studio_id, teacher_id, room_id, student_id, group_id
+  before insert or update of studio_id, teacher_id, room_id, group_id
   on public.lesson_series
   for each row execute function public.check_schedule_refs();
 
 drop trigger if exists sessions_refs on public.sessions;
 create trigger sessions_refs
-  before insert or update of studio_id, teacher_id, room_id, student_id, group_id
+  before insert or update of studio_id, teacher_id, room_id, group_id
   on public.sessions
   for each row execute function public.check_schedule_refs();
 
--- Создать занятия одной серии до даты p_until (включительно).
--- Уже созданные вхождения пропускаются. Возвращает число новых занятий.
+-- Создать занятия одной серии до даты p_until (включительно) — вместе с
+-- составом: ученики серии копируются в каждое новое занятие (группа
+-- подтягивается сама). Уже созданные вхождения пропускаются.
+-- Возвращает число новых занятий.
 create or replace function public.generate_series_sessions(p_series uuid, p_until date)
 returns int
 language plpgsql
@@ -525,7 +667,7 @@ declare
   s public.lesson_series%rowtype;
   first_day date;
   last_day date;
-  n int;
+  created uuid[];
 begin
   select * into s from public.lesson_series where id = p_series;
   if not found or not s.is_active then
@@ -536,17 +678,27 @@ begin
     + ((s.weekday - (extract(isodow from s.start_date)::int - 1) + 7) % 7);
   last_day := least(coalesce(s.end_date, p_until), p_until);
 
-  insert into public.sessions (
-    studio_id, series_id, teacher_id, room_id, type, student_id, group_id,
-    date, occurrence_date, start_time, duration_min
+  with ins as (
+    insert into public.sessions (
+      studio_id, series_id, teacher_id, room_id, group_id,
+      date, occurrence_date, start_time, duration_min
+    )
+    select s.studio_id, s.id, s.teacher_id, s.room_id, s.group_id,
+           d::date, d::date, s.start_time, s.duration_min
+    from generate_series(first_day::timestamp, last_day::timestamp, interval '7 days') d
+    on conflict (series_id, occurrence_date) where series_id is not null do nothing
+    returning id
   )
-  select s.studio_id, s.id, s.teacher_id, s.room_id, s.type, s.student_id, s.group_id,
-         d::date, d::date, s.start_time, s.duration_min
-  from generate_series(first_day::timestamp, last_day::timestamp, interval '7 days') d
-  on conflict (series_id, occurrence_date) where series_id is not null do nothing;
+  select coalesce(array_agg(id), '{}') into created from ins;
 
-  get diagnostics n = row_count;
-  return n;
+  -- отдельной командой: проверка прав на состав должна видеть новые занятия
+  insert into public.session_students (session_id, student_id, studio_id)
+  select x, ss.student_id, s.studio_id
+  from unnest(created) x
+  cross join public.series_students ss
+  where ss.series_id = s.id;
+
+  return coalesce(array_length(created, 1), 0);
 end;
 $$;
 
@@ -621,16 +773,18 @@ begin
     where id = s.id;
     new_id := s.id;
   else
-    -- старая серия заканчивается накануне, с p_from — новая
+    -- старая серия заканчивается накануне, с p_from — новая с тем же составом
     update public.lesson_series set end_date = p_from - 1 where id = s.id;
     insert into public.lesson_series (
-      studio_id, teacher_id, room_id, type, student_id, group_id,
+      studio_id, teacher_id, room_id, group_id,
       weekday, start_time, duration_min, start_date, end_date
     ) values (
-      s.studio_id, p_teacher, p_room, s.type, s.student_id, s.group_id,
+      s.studio_id, p_teacher, p_room, s.group_id,
       p_weekday, p_start, p_duration, p_from, p_end
     )
     returning id into new_id;
+    insert into public.series_students (series_id, student_id, studio_id)
+    select new_id, student_id, studio_id from public.series_students where series_id = s.id;
     -- уцелевшие (с отметками) будущие занятия переходят к новой серии
     update public.sessions set series_id = new_id
     where series_id = s.id and date >= p_from;
@@ -881,3 +1035,306 @@ $$;
 revoke execute on function public.before_user_created(jsonb) from public, anon, authenticated;
 grant usage on schema public to supabase_auth_admin;
 grant execute on function public.before_user_created(jsonb) to supabase_auth_admin;
+
+-- ============================================================================
+-- M7: карточки учеников и состав занятий
+--  * карточка: имя, фамилия, дата рождения, основной педагог, родитель и его
+--    телефон (WhatsApp), фото, «в студии с», «карточка создана»;
+--  * состав занятия — группа и/или ученики: нынешние ученики группы
+--    (меняется состав группы — меняются её занятия) плюс ученики из
+--    session_students; у серии — series_students, копируются в новые занятия;
+--  * педагог заводит карточки, правит своих учеников (он — основной педагог),
+--    создаёт и комплектует группы, полностью ведёт свои занятия и их состав.
+-- ============================================================================
+
+-- Карточка: основной педагог — из той же студии; имя без лишних пробелов.
+create or replace function public.students_before_write()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.first_name := btrim(new.first_name);
+  new.last_name := btrim(coalesce(new.last_name, ''));
+  if new.first_name = '' then
+    raise exception 'Укажите имя ученика';
+  end if;
+  if new.main_teacher_id is not null and not exists (
+       select 1 from public.profiles
+       where id = new.main_teacher_id and studio_id = new.studio_id) then
+    raise exception 'Педагог не из этой студии';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists students_before_write on public.students;
+create trigger students_before_write
+  before insert or update on public.students
+  for each row execute function public.students_before_write();
+
+-- Состав группы: студия — из группы, ученик — из той же студии.
+create or replace function public.group_members_before_write()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.studio_id := (select studio_id from public.groups where id = new.group_id);
+  if new.studio_id is null then
+    raise exception 'Группа не найдена';
+  end if;
+  if not exists (select 1 from public.students
+                 where id = new.student_id and studio_id = new.studio_id) then
+    raise exception 'Ученик не из этой студии';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists group_members_before_write on public.group_members;
+create trigger group_members_before_write
+  before insert or update on public.group_members
+  for each row execute function public.group_members_before_write();
+
+-- Состав серии и занятия: студия — из серии/занятия, ученик — из той же студии.
+create or replace function public.roster_before_write()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if tg_table_name = 'series_students' then
+    new.studio_id := (select studio_id from public.lesson_series where id = new.series_id);
+  else
+    new.studio_id := (select studio_id from public.sessions where id = new.session_id);
+  end if;
+  if new.studio_id is null then
+    raise exception 'Занятие не найдено';
+  end if;
+  if not exists (select 1 from public.students
+                 where id = new.student_id and studio_id = new.studio_id) then
+    raise exception 'Ученик не из этой студии';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists series_students_before_write on public.series_students;
+create trigger series_students_before_write
+  before insert or update on public.series_students
+  for each row execute function public.roster_before_write();
+
+drop trigger if exists session_students_before_write on public.session_students;
+create trigger session_students_before_write
+  before insert or update on public.session_students
+  for each row execute function public.roster_before_write();
+
+-- Ученики, которых нужно хранить отдельно: без повторов и без тех, кто и так
+-- в группе (они приходят на занятие вместе с группой).
+create or replace function public.roster_extras(p_group uuid, p_students uuid[])
+returns uuid[]
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce(array_agg(distinct x), '{}')
+  from unnest(coalesce(p_students, '{}')) x
+  where p_group is null
+     or not exists (select 1 from public.group_members m
+                    where m.group_id = p_group and m.student_id = x);
+$$;
+
+-- Новое занятие: разовое (p_weekdays пусто) или серии на дни недели.
+-- Состав — группа и/или ученики; хотя бы что-то одно обязательно.
+create or replace function public.create_lesson(
+  p_teacher  uuid,
+  p_room     uuid,
+  p_group    uuid,
+  p_students uuid[],
+  p_date     date,
+  p_start    time,
+  p_duration int,
+  p_weekdays int[],
+  p_end      date,
+  p_until    date
+)
+returns void
+language plpgsql
+set search_path = public
+as $$
+declare
+  sid uuid := public.current_studio_id();
+  extra uuid[] := public.roster_extras(p_group, p_students);
+  wd int;
+  new_id uuid;
+begin
+  if sid is null then
+    raise exception 'Нет доступа';
+  end if;
+  if p_group is null and cardinality(extra) = 0 then
+    raise exception 'Выберите группу или хотя бы одного ученика';
+  end if;
+
+  if coalesce(cardinality(p_weekdays), 0) = 0 then
+    insert into public.sessions (studio_id, teacher_id, room_id, group_id, date, start_time, duration_min)
+    values (sid, p_teacher, p_room, p_group, p_date, p_start, p_duration)
+    returning id into new_id;
+    insert into public.session_students (session_id, student_id, studio_id)
+    select new_id, x, sid from unnest(extra) x;
+    return;
+  end if;
+
+  foreach wd in array p_weekdays loop
+    insert into public.lesson_series (
+      studio_id, teacher_id, room_id, group_id, weekday, start_time, duration_min, start_date, end_date
+    ) values (
+      sid, p_teacher, p_room, p_group, wd, p_start, p_duration, p_date, p_end
+    )
+    returning id into new_id;
+    insert into public.series_students (series_id, student_id, studio_id)
+    select new_id, x, sid from unnest(extra) x;
+    perform public.generate_series_sessions(new_id, p_until);
+  end loop;
+end;
+$$;
+
+-- Состав одного занятия: группа и ученики. Отметки тех, кого убрали из
+-- состава, удаляются (приложение предупреждает об этом заранее).
+create or replace function public.set_session_roster(p_session uuid, p_group uuid, p_students uuid[])
+returns void
+language plpgsql
+set search_path = public
+as $$
+declare
+  s public.sessions%rowtype;
+  extra uuid[] := public.roster_extras(p_group, p_students);
+begin
+  select * into s from public.sessions where id = p_session;
+  if not found then
+    raise exception 'Занятие не найдено';
+  end if;
+  if not (public.is_director() or s.teacher_id = auth.uid()) then
+    raise exception 'Нет прав менять это занятие';
+  end if;
+  if p_group is null and cardinality(extra) = 0 then
+    raise exception 'Выберите группу или хотя бы одного ученика';
+  end if;
+
+  update public.sessions set group_id = p_group where id = s.id;
+  delete from public.session_students where session_id = s.id and student_id <> all(extra);
+  insert into public.session_students (session_id, student_id, studio_id)
+  select s.id, x, s.studio_id from unnest(extra) x
+  on conflict do nothing;
+  delete from public.attendance a
+  where a.session_id = s.id
+    and a.student_id <> all(extra)
+    and (p_group is null or not exists (select 1 from public.group_members m
+                                        where m.group_id = p_group and m.student_id = a.student_id));
+end;
+$$;
+
+-- Состав серии начиная с занятия p_from: шаблон серии и все её занятия с
+-- этой даты. Отметки (посещение, оплата) не удаляются — тот, у кого они уже
+-- есть, остаётся на своём занятии.
+create or replace function public.set_series_roster(
+  p_series   uuid,
+  p_from     date,
+  p_group    uuid,
+  p_students uuid[]
+)
+returns void
+language plpgsql
+set search_path = public
+as $$
+declare
+  s public.lesson_series%rowtype;
+  extra uuid[] := public.roster_extras(p_group, p_students);
+begin
+  select * into s from public.lesson_series where id = p_series;
+  if not found then
+    raise exception 'Серия не найдена';
+  end if;
+  if not (public.is_director() or s.teacher_id = auth.uid()) then
+    raise exception 'Нет прав менять эту серию';
+  end if;
+  if p_group is null and cardinality(extra) = 0 then
+    raise exception 'Выберите группу или хотя бы одного ученика';
+  end if;
+
+  update public.lesson_series set group_id = p_group where id = s.id;
+  delete from public.series_students where series_id = s.id and student_id <> all(extra);
+  insert into public.series_students (series_id, student_id, studio_id)
+  select s.id, x, s.studio_id from unnest(extra) x
+  on conflict do nothing;
+
+  update public.sessions set group_id = p_group where series_id = s.id and date >= p_from;
+  delete from public.session_students ss
+  using public.sessions se
+  where ss.session_id = se.id and se.series_id = s.id and se.date >= p_from
+    and ss.student_id <> all(extra);
+  insert into public.session_students (session_id, student_id, studio_id)
+  select se.id, x, s.studio_id
+  from public.sessions se cross join unnest(extra) x
+  where se.series_id = s.id and se.date >= p_from
+  on conflict do nothing;
+end;
+$$;
+
+revoke all on function public.roster_extras(uuid, uuid[]) from public, anon;
+revoke all on function public.create_lesson(uuid, uuid, uuid, uuid[], date, time, int, int[], date, date) from public, anon;
+revoke all on function public.set_session_roster(uuid, uuid, uuid[]) from public, anon;
+revoke all on function public.set_series_roster(uuid, date, uuid, uuid[]) from public, anon;
+grant execute on function public.roster_extras(uuid, uuid[]) to authenticated;
+grant execute on function public.create_lesson(uuid, uuid, uuid, uuid[], date, time, int, int[], date, date) to authenticated;
+grant execute on function public.set_session_roster(uuid, uuid, uuid[]) to authenticated;
+grant execute on function public.set_series_roster(uuid, date, uuid, uuid[]) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Фото учеников: закрытое хранилище student-photos, файл лежит по пути
+-- <студия>/<ученик>/<имя файла>. Видят и загружают все в студии; удалить
+-- (заменить) старое фото — тот, кто может править карточку.
+-- ---------------------------------------------------------------------------
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('student-photos', 'student-photos', false, 5242880,
+        array['image/jpeg', 'image/png', 'image/webp'])
+on conflict (id) do update
+set public = false,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
+-- может ли текущий пользователь править карточку ученика (id — текстом из пути)
+create or replace function public.can_edit_student(p_student text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.students
+    where id::text = p_student
+      and studio_id = public.current_studio_id()
+      and (public.is_director() or main_teacher_id = auth.uid())
+  );
+$$;
+revoke all on function public.can_edit_student(text) from public, anon;
+grant execute on function public.can_edit_student(text) to authenticated;
+
+drop policy if exists student_photos_select on storage.objects;
+create policy student_photos_select on storage.objects
+  for select to authenticated
+  using (bucket_id = 'student-photos'
+         and (storage.foldername(name))[1] = public.current_studio_id()::text);
+drop policy if exists student_photos_insert on storage.objects;
+create policy student_photos_insert on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'student-photos'
+              and (storage.foldername(name))[1] = public.current_studio_id()::text);
+drop policy if exists student_photos_delete on storage.objects;
+create policy student_photos_delete on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'student-photos'
+         and (storage.foldername(name))[1] = public.current_studio_id()::text
+         and public.can_edit_student((storage.foldername(name))[2]));

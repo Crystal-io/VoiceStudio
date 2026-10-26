@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { studentColumns } from '@/lib/students'
 import type { Group, GroupMember, Profile, Room, Student } from '@/lib/types'
 
 /**
@@ -27,10 +28,7 @@ export async function loadDirectory(): Promise<{ dir: Directory; error: string |
       .select('id, studio_id, full_name, role, color, is_active, created_at')
       .order('full_name'),
     supabase.from('rooms').select('id, studio_id, name, is_active, created_at').order('name'),
-    supabase
-      .from('students')
-      .select('id, studio_id, full_name, birth_date, parent_contact, notes, is_active, created_at')
-      .order('full_name'),
+    supabase.from('students').select(studentColumns).order('full_name'),
     supabase.from('groups').select('id, studio_id, name, is_active, created_at').order('name'),
     supabase.from('group_members').select('group_id, student_id'),
   ])

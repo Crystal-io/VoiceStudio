@@ -87,20 +87,20 @@ export async function loadDebts(): Promise<{ debts: LessonMark[]; error: string 
   return { debts, error: res.error }
 }
 
+/** Нынешние (не в архиве) ученики группы. */
+export function groupMemberIds(groupId: string | null, dir: Directory): string[] {
+  if (!groupId) return []
+  return (dir.membersByGroup.get(groupId) ?? []).filter((id) => dir.studentById.get(id)?.is_active)
+}
+
 /**
- * Кто должен быть на занятии: ученик индивидуального занятия или нынешний
- * состав группы — плюс все, у кого на этом занятии уже есть отметка (даже
+ * Кто должен быть на занятии: нынешний состав группы (если она есть) и
+ * ученики занятия — плюс все, у кого на этом занятии уже есть отметка (даже
  * если с тех пор ушли из группы или в архиве).
  */
 export function rosterOf(session: Session, dir: Directory, rows: Attendance[]): Student[] {
-  const ids = new Set<string>()
-  if (session.type === 'individual') {
-    if (session.student_id) ids.add(session.student_id)
-  } else {
-    for (const id of dir.membersByGroup.get(session.group_id ?? '') ?? []) {
-      if (dir.studentById.get(id)?.is_active) ids.add(id)
-    }
-  }
+  const ids = new Set<string>(groupMemberIds(session.group_id, dir))
+  for (const id of session.student_ids) ids.add(id)
   for (const r of rows) ids.add(r.student_id)
   return [...ids]
     .map((id) => dir.studentById.get(id))
@@ -130,8 +130,9 @@ export function attendanceSummary(
   if (session.status === 'cancelled') return null
   const marked = rows.filter((r) => r.status)
   const paid = rows.filter((r) => r.is_paid).length
+  const total = rosterOf(session, dir, rows).length
 
-  if (session.type === 'individual') {
+  if (!session.group_id && total <= 1) {
     const row = rows[0]
     if (!row) return null
     const parts: string[] = []
@@ -145,7 +146,6 @@ export function attendanceSummary(
     }
   }
 
-  const total = rosterOf(session, dir, rows).length
   if (marked.length === 0 && paid === 0) return null
   const came = marked.filter((r) => r.status === 'present' || r.status === 'late').length
   const parts: string[] = []

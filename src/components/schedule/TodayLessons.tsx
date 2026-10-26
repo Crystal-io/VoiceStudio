@@ -21,7 +21,7 @@ const UNMARKED_SHOWN = 5
  */
 export function TodayLessons({ teacherId }: { teacherId?: string }) {
   const { profile } = useProfile()
-  const { dir } = useDirectory()
+  const { dir, reload: reloadDir } = useDirectory()
   const [sessions, setSessions] = useState<Session[] | null>(null)
   const [attendance, setAttendance] = useState<Map<string, Attendance[]>>(new Map())
   const [selected, setSelected] = useState<Session | null>(null)
@@ -119,6 +119,7 @@ export function TodayLessons({ teacherId }: { teacherId?: string }) {
             setSelected(null)
             setVersion((v) => v + 1)
           }}
+          reloadDir={reloadDir}
         />
       )}
     </div>

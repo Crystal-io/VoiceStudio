@@ -5,6 +5,7 @@
 import type { Directory } from '@/lib/directory'
 import type { Attendance, AttendanceStatus, Profile, Room, Session, Student } from '@/lib/types'
 import { came, isOver, type LessonMark } from '@/lib/attendance'
+import { isGroupLesson } from '@/lib/schedule'
 import { addDays, addMonths, endOfMonth, formatMonth, formatWeekRange, startOfMonth, startOfWeek } from '@/lib/dates'
 
 // ---------------------------------------------------------------------------
@@ -74,7 +75,7 @@ function add(t: Tally, s: Session) {
   if (state === 'cancelled') return
   t.count += 1
   t.minutes += s.duration_min
-  if (s.type === 'group') t.group += 1
+  if (isGroupLesson(s)) t.group += 1
   else t.individual += 1
 }
 

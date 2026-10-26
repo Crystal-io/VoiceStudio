@@ -1,8 +1,8 @@
 import type { Directory } from '@/lib/directory'
 import type { Attendance, Session } from '@/lib/types'
 import { fromMinutes, hhmm, toMinutes } from '@/lib/dates'
-import { lessonTitle, teacherColor } from '@/lib/schedule'
-import { attendanceSummary, isUnmarked } from '@/lib/attendance'
+import { isGroupLesson, lessonTitle, teacherColor } from '@/lib/schedule'
+import { attendanceSummary, isUnmarked, rosterOf } from '@/lib/attendance'
 import { UsersIcon } from '@/components/icons'
 
 /** Карточка занятия в списке: время, кого учим, кабинет, педагог, отметки. */
@@ -23,12 +23,8 @@ export function LessonCard({
   const room = session.room_id ? dir.roomById.get(session.room_id)?.name : null
   const cancelled = session.status === 'cancelled'
   const moved = !!session.occurrence_date && session.occurrence_date !== session.date
-  const groupSize =
-    session.type === 'group'
-      ? (dir.membersByGroup.get(session.group_id ?? '') ?? []).filter(
-          (id) => dir.studentById.get(id)?.is_active,
-        ).length
-      : null
+  const group = isGroupLesson(session)
+  const groupSize = group ? rosterOf(session, dir, attendance).length : null
 
   const summary = attendanceSummary(session, dir, attendance)
   const badge = cancelled
@@ -64,7 +60,7 @@ export function LessonCard({
       </div>
       <div className="min-w-0 flex-1">
         <p className={`flex items-center gap-1.5 font-medium ${cancelled ? 'line-through' : ''}`}>
-          {session.type === 'group' && (
+          {group && (
             <UsersIcon className="size-4 shrink-0 text-slate-400" aria-label="Группа" />
           )}
           <span className="truncate">{lessonTitle(session, dir)}</span>

@@ -4,11 +4,12 @@ import type { Directory } from '@/lib/directory'
 import type { Student } from '@/lib/types'
 import { came, STATUS_OPTIONS, type LessonMark } from '@/lib/attendance'
 import { formatDayWeekday, hhmm } from '@/lib/dates'
-import { findPhone, plural } from '@/lib/format'
+import { plural } from '@/lib/format'
 import { byDateTime } from '@/lib/reports'
+import { isGroupLesson, lessonTitle } from '@/lib/schedule'
 import { Button, ErrorNote, Modal } from '@/components/ui'
 import { PaidToggle } from '@/components/schedule/AttendanceList'
-import { PhoneIcon } from '@/components/icons'
+import { ContactButtons } from '@/components/students/StudentCard'
 
 /**
  * Занятия ученика с отметками: статус посещения и оплата. Директор может
@@ -40,7 +41,6 @@ export function StudentMarksModal({
 
   const sorted = [...marks].sort(byDateTime)
   const owed = sorted.filter((m) => came(m.row.status) && !paid.get(m.session.id))
-  const phone = findPhone(student.parent_contact)
 
   async function save(sessionIds: string[], value: boolean) {
     const prev = new Map(paid)
@@ -85,21 +85,13 @@ export function StudentMarksModal({
               )
             )}
           </p>
-          {student.parent_contact && (
+          {(student.parent_name || student.parent_phone) && (
             <p className="text-slate-700 dark:text-slate-200">
-              {student.parent_contact}
-              {phone && (
-                <a
-                  href={`tel:${phone}`}
-                  className="ml-2 inline-flex items-center gap-1 font-medium text-brand-600 dark:text-brand-400"
-                >
-                  <PhoneIcon className="size-4" />
-                  Позвонить
-                </a>
-              )}
+              {[student.parent_name, student.parent_phone].filter(Boolean).join(' · ')}
             </p>
           )}
         </div>
+        <ContactButtons phone={student.parent_phone} />
 
         {owed.length > 1 && (
           <Button
@@ -117,10 +109,7 @@ export function StudentMarksModal({
           {sorted.map(({ session, row }) => {
             const status = STATUS_OPTIONS.find((o) => o.value === row.status)
             const isPaid = !!paid.get(session.id)
-            const what =
-              session.type === 'group'
-                ? (dir.groupById.get(session.group_id ?? '')?.name ?? 'Группа')
-                : 'Индивидуальное'
+            const what = isGroupLesson(session) ? lessonTitle(session, dir) : 'Индивидуальное'
             const teacher = dir.profileById.get(session.teacher_id)?.full_name
             return (
               <li key={session.id} className="flex items-center gap-3 px-3 py-2.5">

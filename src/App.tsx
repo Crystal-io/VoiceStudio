@@ -112,14 +112,7 @@ function AppRoutes() {
               </DirectorOnly>
             }
           />
-          <Route
-            path="students"
-            element={
-              <DirectorOnly>
-                <StudentsPage />
-              </DirectorOnly>
-            }
-          />
+          <Route path="students" element={<StudentsPage />} />
           <Route
             path="reports"
             element={

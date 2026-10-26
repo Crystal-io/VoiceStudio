@@ -22,6 +22,7 @@ const directorNav: NavItem[] = [
 const teacherNav: NavItem[] = [
   { to: '/', label: 'Главная', icon: HomeIcon },
   { to: '/schedule', label: 'Расписание', icon: CalendarIcon },
+  { to: '/students', label: 'Ученики', icon: MusicIcon },
 ]
 
 export function AppShell() {

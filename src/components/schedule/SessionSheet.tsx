@@ -4,18 +4,11 @@ import type { Directory } from '@/lib/directory'
 import type { Attendance, AttendanceStatus, LessonSeries, Session } from '@/lib/types'
 import { formatDayLong, formatDayMonth, hhmm, timeRange, todayISO, WEEKDAYS_EVERY } from '@/lib/dates'
 import { attendanceColumns, rosterOf } from '@/lib/attendance'
-import { findPhone } from '@/lib/format'
-import { lessonTitle, seriesColumns, teacherColor } from '@/lib/schedule'
+import { lessonTitle, seriesColumns, teacherColor, toSeries } from '@/lib/schedule'
 import { Button, ErrorNote, Modal, Spinner } from '@/components/ui'
 import { AttendanceList } from '@/components/schedule/AttendanceList'
-import {
-  CalendarIcon,
-  ClockIcon,
-  DoorIcon,
-  PhoneIcon,
-  RepeatIcon,
-  UserIcon,
-} from '@/components/icons'
+import { ContactButtons } from '@/components/students/StudentCard'
+import { CalendarIcon, ClockIcon, DoorIcon, RepeatIcon, UserIcon } from '@/components/icons'
 
 type Confirm = 'delete' | 'stop' | null
 
@@ -29,6 +22,7 @@ export function SessionSheet({
   onAttendanceChanged,
   onMove,
   onEditSeries,
+  onEditRoster,
 }: {
   session: Session
   dir: Directory
@@ -40,6 +34,8 @@ export function SessionSheet({
   onAttendanceChanged: () => void
   onMove: () => void
   onEditSeries: (series: LessonSeries) => void
+  /** «Изменить состав» — с текущими отметками занятия */
+  onEditRoster: (rows: Attendance[]) => void
 }) {
   const [series, setSeries] = useState<LessonSeries | null>(null)
   const [rows, setRows] = useState<Attendance[] | null>(null)
@@ -56,7 +52,7 @@ export function SessionSheet({
       .eq('id', session.series_id)
       .maybeSingle()
       .then(({ data }) => {
-        if (alive) setSeries((data as LessonSeries) ?? null)
+        if (alive) setSeries(data ? toSeries(data) : null)
       })
     return () => {
       alive = false
@@ -85,9 +81,9 @@ export function SessionSheet({
   // «проведено» база ставит сама по отметкам — здесь повторяем это локально
   const done = rows ? rows.some((r) => r.status) : session.status === 'done'
   const moved = !!session.occurrence_date && session.occurrence_date !== session.date
-  const student = session.student_id ? dir.studentById.get(session.student_id) : null
-  const phone = findPhone(student?.parent_contact ?? null)
   const roster = rosterOf(session, dir, rows ?? [])
+  // занятие с одним учеником — сразу под рукой контакт родителя
+  const solo = !session.group_id && roster.length === 1 ? roster[0] : null
 
   /** Сохранить отметку ученика. Пустая строка (без статуса и оплаты) удаляется. */
   async function saveRows(studentIds: string[], patch: Partial<Pick<Attendance, 'status' | 'is_paid'>>) {
@@ -217,22 +213,13 @@ export function SessionSheet({
                 ? seriesText(series)
                 : 'Повторяющееся занятие'}
           </InfoRow>
-          {session.type === 'individual' &&
-            student?.parent_contact && (
-              <InfoRow icon={<UserIcon className="size-5" />}>
-                {student.parent_contact}
-                {phone && (
-                  <a
-                    href={`tel:${phone}`}
-                    className="ml-2 inline-flex items-center gap-1 font-medium text-brand-600 dark:text-brand-400"
-                  >
-                    <PhoneIcon className="size-4" />
-                    Позвонить
-                  </a>
-                )}
-              </InfoRow>
-            )}
+          {solo && (solo.parent_name || solo.parent_phone) && (
+            <InfoRow icon={<UserIcon className="size-5" />}>
+              {[solo.parent_name, solo.parent_phone].filter(Boolean).join(' · ')}
+            </InfoRow>
+          )}
         </ul>
+        {solo && <ContactButtons phone={solo.parent_phone} />}
 
         {!cancelled &&
           (rows ? (
@@ -283,6 +270,9 @@ export function SessionSheet({
 
         {canEdit && !confirm && (
           <div className="grid gap-2">
+            <Button variant="ghost" disabled={busy || !rows} onClick={() => onEditRoster(rows ?? [])}>
+              Изменить состав
+            </Button>
             <Button variant="ghost" disabled={busy} onClick={onMove}>
               {cancelled ? 'Перенести на другое время' : 'Перенести это занятие'}
             </Button>

@@ -1,16 +1,36 @@
 import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
-import type { LessonType, Profile, Session } from '@/lib/types'
+import type { LessonSeries, Profile, Session } from '@/lib/types'
 import { addDays, datesOnWeekdays, formatDayShort, timeRange, todayISO, WEEKDAYS_SHORT, weekdayOf } from '@/lib/dates'
 
 /** На сколько дней вперёд заранее создаём занятия из серий. */
 export const HORIZON_DAYS = 16 * 7
 
+// Ученики занятия/серии (кроме группы) приходят вложенным списком —
+// toSession/toSeries разворачивают его в student_ids.
 export const sessionColumns =
-  'id, studio_id, series_id, teacher_id, room_id, type, student_id, group_id, date, occurrence_date, start_time, duration_min, status, note, created_at'
+  'id, studio_id, series_id, teacher_id, room_id, group_id, date, occurrence_date, start_time, duration_min, status, note, created_at, session_students(student_id)'
 
 export const seriesColumns =
-  'id, studio_id, teacher_id, room_id, type, student_id, group_id, weekday, start_time, duration_min, start_date, end_date, is_active, created_at'
+  'id, studio_id, teacher_id, room_id, group_id, weekday, start_time, duration_min, start_date, end_date, is_active, created_at, series_students(student_id)'
+
+type RosterRows = { student_id: string }[] | null | undefined
+
+export function toSession(raw: unknown): Session {
+  const { session_students, ...rest } = raw as Omit<Session, 'student_ids'> & {
+    session_students?: RosterRows
+  }
+  return { ...rest, student_ids: (session_students ?? []).map((r) => r.student_id) }
+}
+
+export function toSeries(raw: unknown): LessonSeries {
+  const { series_students, ...rest } = raw as Omit<LessonSeries, 'student_ids'> & {
+    series_students?: RosterRows
+  }
+  return { ...rest, student_ids: (series_students ?? []).map((r) => r.student_id) }
+}
+
+const toSessions = (data: unknown): Session[] => ((data as unknown[]) ?? []).map(toSession)
 
 // До какой даты занятия уже досозданы в этой вкладке — чтобы не дёргать
 // базу при каждом листании недели.
@@ -46,7 +66,7 @@ export async function loadSessions(
     .order('start_time')
   if (teacherId) q = q.eq('teacher_id', teacherId)
   const { data, error } = await q
-  return { sessions: (data as Session[]) ?? [], error: error ? error.message : null }
+  return { sessions: toSessions(data), error: error ? error.message : null }
 }
 
 /** Разбить список на порции — для длинных фильтров `in (...)` в адресе запроса. */
@@ -63,18 +83,35 @@ export async function loadSessionsByIds(
   const results = await Promise.all(
     chunks(ids, 100).map((part) => supabase.from('sessions').select(sessionColumns).in('id', part)),
   )
-  const sessions = results.flatMap((r) => (r.data as Session[]) ?? [])
+  const sessions = results.flatMap((r) => toSessions(r.data))
   const error = results.find((r) => r.error)?.error
   return { sessions, error: error ? error.message : null }
 }
 
-/** Кого учим: имя ученика или название группы. */
-export function lessonTitle(
-  s: { type: LessonType; student_id: string | null; group_id: string | null },
-  dir: Directory,
-): string {
-  if (s.type === 'group') return dir.groupById.get(s.group_id ?? '')?.name ?? 'Группа'
-  return dir.studentById.get(s.student_id ?? '')?.full_name ?? 'Ученик'
+type Roster = { group_id: string | null; student_ids: string[] }
+
+/**
+ * Кого учим: «Хор», «Хор + 2», «Маша Петрова», «Маша и Петя»,
+ * «Маша, Петя и ещё 3».
+ */
+export function lessonTitle(s: Roster, dir: Directory): string {
+  const group = s.group_id ? (dir.groupById.get(s.group_id)?.name ?? 'Группа') : null
+  const extra = s.student_ids.length
+  if (group) return extra > 0 ? `${group} + ${extra}` : group
+  const names = s.student_ids
+    .map((id) => dir.studentById.get(id))
+    .filter((x) => !!x)
+    .sort((a, b) => a.full_name.localeCompare(b.full_name, 'ru'))
+  if (names.length === 0) return 'Ученик'
+  if (names.length === 1) return names[0].full_name
+  const first = names.map((x) => x.first_name)
+  if (names.length === 2) return `${first[0]} и ${first[1]}`
+  return `${first[0]}, ${first[1]} и ещё ${names.length - 2}`
+}
+
+/** Групповое: есть группа или учеников больше одного. */
+export function isGroupLesson(s: Roster): boolean {
+  return !!s.group_id || s.student_ids.length > 1
 }
 
 const palette = ['#4f46e5', '#0891b2', '#db2777', '#ea580c', '#16a34a', '#9333ea', '#ca8a04', '#dc2626']
@@ -128,20 +165,22 @@ export async function findConflicts(
   dir: Directory,
 ): Promise<{ conflicts: Conflict[]; error: string | null }> {
   if (q.dates.length === 0) return { conflicts: [], error: null }
-  const { data, error } = await supabase.rpc('schedule_conflicts', {
-    p_teacher: q.teacherId,
-    p_room: q.roomId,
-    p_dates: q.dates,
-    p_start: q.start,
-    p_duration: q.duration,
-    p_ignore_series: q.ignoreSeriesId ?? null,
-    p_ignore_session: q.ignoreSessionId ?? null,
-  })
+  const { data, error } = await supabase
+    .rpc('schedule_conflicts', {
+      p_teacher: q.teacherId,
+      p_room: q.roomId,
+      p_dates: q.dates,
+      p_start: q.start,
+      p_duration: q.duration,
+      p_ignore_series: q.ignoreSeriesId ?? null,
+      p_ignore_session: q.ignoreSessionId ?? null,
+    })
+    .select(sessionColumns)
   if (error) return { conflicts: [], error: error.message }
 
   // Занятия одной серии сворачиваем в одну строку: «вт 15:00–15:45 · 12 дат».
   const byKey = new Map<string, Conflict>()
-  for (const s of (data as Session[]) ?? []) {
+  for (const s of toSessions(data)) {
     const key = s.series_id ?? s.id
     const sameTeacher = s.teacher_id === q.teacherId
     const sameRoom = !!q.roomId && s.room_id === q.roomId

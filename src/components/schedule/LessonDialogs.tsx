@@ -1,14 +1,19 @@
 import { useState } from 'react'
 import type { Directory } from '@/lib/directory'
-import type { LessonSeries, Profile, Session } from '@/lib/types'
+import type { Attendance, LessonSeries, Profile, Session } from '@/lib/types'
 import { SessionSheet } from '@/components/schedule/SessionSheet'
 import { EditSeriesModal, MoveSessionModal } from '@/components/schedule/EditLessonModals'
+import { RosterModal } from '@/components/schedule/RosterModal'
 
-type Mode = { kind: 'sheet' } | { kind: 'move' } | { kind: 'series'; series: LessonSeries }
+type Mode =
+  | { kind: 'sheet' }
+  | { kind: 'move' }
+  | { kind: 'series'; series: LessonSeries }
+  | { kind: 'roster'; rows: Attendance[] }
 
 /**
  * Всё, что открывается по нажатию на занятие: карточка с посещаемостью,
- * перенос и правка серии. Используется в расписании и на главной.
+ * перенос, правка серии и состава. Используется в расписании и на главной.
  */
 export function LessonDialogs({
   session,
@@ -16,6 +21,7 @@ export function LessonDialogs({
   me,
   onClose,
   onChanged,
+  reloadDir,
 }: {
   session: Session
   dir: Directory
@@ -23,6 +29,8 @@ export function LessonDialogs({
   onClose: () => void
   /** что-то поменялось — перечитать список (и, если задано, перейти к дате) */
   onChanged: (goTo?: string) => void
+  /** перечитать справочник — после новой карточки ученика */
+  reloadDir: () => Promise<void>
 }) {
   const [mode, setMode] = useState<Mode>({ kind: 'sheet' })
   const [dirty, setDirty] = useState(false)
@@ -54,6 +62,20 @@ export function LessonDialogs({
     )
   }
 
+  if (mode.kind === 'roster') {
+    return (
+      <RosterModal
+        session={session}
+        rows={mode.rows}
+        dir={dir}
+        me={me}
+        onClose={() => (dirty ? onChanged() : onClose())}
+        onDone={() => onChanged()}
+        reloadDir={reloadDir}
+      />
+    )
+  }
+
   return (
     <SessionSheet
       session={session}
@@ -64,6 +86,7 @@ export function LessonDialogs({
       onAttendanceChanged={() => setDirty(true)}
       onMove={() => setMode({ kind: 'move' })}
       onEditSeries={(series) => setMode({ kind: 'series', series })}
+      onEditRoster={(rows) => setMode({ kind: 'roster', rows })}
     />
   )
 }

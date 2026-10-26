@@ -1,6 +1,7 @@
 import type { Attendance, AttendanceStatus, Student } from '@/lib/types'
 import { STATUS_OPTIONS } from '@/lib/attendance'
 import { Badge } from '@/components/ui'
+import { StudentAvatar } from '@/components/students/StudentAvatar'
 import { CheckIcon } from '@/components/icons'
 
 /**
@@ -58,7 +59,8 @@ export function AttendanceList({
 
       {roster.length === 0 ? (
         <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
-          В группе пока никого — состав меняется в разделе «Ученики» → «Группы».
+          В составе пока никого — добавьте учеников в группу («Ученики» → «Группы») или
+          кнопкой «Изменить состав».
         </p>
       ) : (
         <ul className="divide-y divide-slate-100 rounded-xl ring-1 ring-slate-200 dark:divide-slate-800 dark:ring-slate-800">
@@ -67,9 +69,12 @@ export function AttendanceList({
             return (
               <li key={s.id} className="space-y-2 px-3 py-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate font-medium">
-                    {s.full_name}
-                    {!s.is_active && <Badge>архив</Badge>}
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <StudentAvatar student={s} size="sm" muted={!s.is_active} />
+                    <span className="min-w-0 truncate font-medium">
+                      {s.full_name}
+                      {!s.is_active && <Badge>архив</Badge>}
+                    </span>
                   </span>
                   <PaidToggle
                     on={!!row?.is_paid}
