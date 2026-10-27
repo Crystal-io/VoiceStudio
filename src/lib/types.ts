@@ -19,6 +19,8 @@ export type Invitation = {
   full_name: string
   role: Role
   created_at: string
+  /** после этой даты по приглашению не войти — директор может продлить */
+  expires_at: string
 }
 
 export type Room = {

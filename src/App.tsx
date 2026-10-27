@@ -80,6 +80,27 @@ function NoProfileNotice() {
   )
 }
 
+function DisabledNotice() {
+  const { user, signOut } = useAuth()
+  return (
+    <div className="mx-auto flex min-h-full max-w-md flex-col justify-center px-6 text-center">
+      <h1 className="text-lg font-semibold">Доступ отключён</h1>
+      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+        Директор студии отключил доступ для{' '}
+        <span className="font-medium">{user?.email}</span>. Если это ошибка — попросите
+        директора вернуть его в разделе «Педагоги».
+      </p>
+      <button
+        type="button"
+        onClick={signOut}
+        className="mx-auto mt-6 rounded-lg px-4 py-2 text-sm text-slate-500 ring-1 ring-slate-200 transition hover:bg-slate-100 dark:ring-slate-700 dark:hover:bg-slate-800"
+      >
+        Выйти
+      </button>
+    </div>
+  )
+}
+
 /** Только директор; иначе — на главную. */
 function DirectorOnly({ children }: { children: ReactNode }) {
   const { profile } = useProfile()
@@ -91,6 +112,7 @@ function AppRoutes() {
   const { profile, loading, missing } = useProfile()
   if (loading) return <Splash />
   if (missing || !profile) return <NoProfileNotice />
+  if (!profile.is_active) return <DisabledNotice />
 
   return (
     <BrowserRouter>

@@ -75,3 +75,9 @@ $$;
 -- delete from public.lesson_series where group_id in (select id from public.groups where name like '%(тест)');
 -- delete from public.groups where name like '%(тест)';
 -- delete from public.students where notes = 'Тестовая карточка';
+--
+-- Тестовые педагоги («Михаил», «Michael - test»): с занятиями их не удалить
+-- (защита M9 — иначе каскад стёр бы посещаемость), поэтому сначала занятия,
+-- потом сами пользователи: Dashboard → Authentication → Users → Delete.
+-- delete from public.sessions where teacher_id in (select id from public.profiles where full_name in ('Михаил', 'Michael - test'));
+-- delete from public.lesson_series where teacher_id in (select id from public.profiles where full_name in ('Михаил', 'Michael - test'));

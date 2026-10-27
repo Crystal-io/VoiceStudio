@@ -24,14 +24,26 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
 
-  async function load() {
+  /** silent — тихая перепроверка без заставки; при сбое сети оставляем что было. */
+  async function load(silent = false) {
     if (!user) {
       setProfile(null)
       setLoading(false)
       return
     }
-    setLoading(true)
     const columns = 'id, studio_id, full_name, role, color, is_active, created_at'
+    if (silent) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select(columns)
+        .eq('id', user.id)
+        .maybeSingle()
+      if (!error && data) {
+        setProfile((prev) => (JSON.stringify(prev) === JSON.stringify(data) ? prev : (data as Profile)))
+      }
+      return
+    }
+    setLoading(true)
     let { data } = await supabase
       .from('profiles')
       .select(columns)
@@ -60,13 +72,25 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id])
 
+  // Роль и доступ меняет директор — подхватываем, когда приложение снова
+  // на экране (иначе отключённый видел бы пустые списки вместо объяснения).
+  useEffect(() => {
+    if (!user) return
+    function onVisible() {
+      if (document.visibilityState === 'visible') void load(true)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id])
+
   return (
     <ProfileContext.Provider
       value={{
         profile,
         loading,
         missing: !loading && profile === null,
-        reload: load,
+        reload: () => load(),
       }}
     >
       {children}

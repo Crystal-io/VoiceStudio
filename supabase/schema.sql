@@ -22,7 +22,9 @@ set check_function_bodies = off;
 -- Справочные функции (SECURITY DEFINER, чтобы не упереться в рекурсию RLS)
 -- ---------------------------------------------------------------------------
 
--- studio_id текущего пользователя
+-- studio_id текущего пользователя. Отключённому («Отключить» в «Педагогах»)
+-- — null: на нём держатся все правила доступа, так что он не видит и не
+-- меняет ничего, кроме своего профиля (чтобы приложение сказало «отключён»).
 create or replace function public.current_studio_id()
 returns uuid
 language sql
@@ -30,10 +32,10 @@ stable
 security definer
 set search_path = public
 as $$
-  select studio_id from public.profiles where id = auth.uid();
+  select studio_id from public.profiles where id = auth.uid() and is_active;
 $$;
 
--- является ли текущий пользователь директором
+-- является ли текущий пользователь действующим директором
 create or replace function public.is_director()
 returns boolean
 language sql
@@ -43,8 +45,24 @@ set search_path = public
 as $$
   select exists (
     select 1 from public.profiles
-    where id = auth.uid() and role = 'director'
+    where id = auth.uid() and role = 'director' and is_active
   );
+$$;
+
+-- Почта для сравнения: без пробелов и регистра; у Gmail ещё без точек и
+-- «+хвоста» — ivan.petrov+studio@gmail.com и ivanpetrov@gmail.com один ящик,
+-- а Google при входе отдаёт адрес так, как его когда-то завели.
+create or replace function public.norm_email(p text)
+returns text
+language sql
+immutable
+as $$
+  select case
+    when split_part(e, '@', 2) in ('gmail.com', 'googlemail.com') then
+      replace(split_part(split_part(e, '@', 1), '+', 1), '.', '') || '@gmail.com'
+    else e
+  end
+  from (select lower(btrim(coalesce(p, ''))) as e) x;
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -80,9 +98,17 @@ create table if not exists public.invitations (
   role        text not null default 'teacher' check (role in ('teacher','director')),
   created_at  timestamptz not null default now()
 );
-create unique index if not exists invitations_studio_email_uidx
-  on public.invitations(studio_id, lower(email));
-create index if not exists invitations_email_idx on public.invitations(lower(email));
+-- Приглашение действует 30 дней (директор может продлить): забытое
+-- приглашение на почту с опечаткой не остаётся вечным пропуском в студию.
+alter table public.invitations add column if not exists expires_at timestamptz
+  not null default now() + interval '30 days';
+-- Одна почта — одно приглашение (сравниваем по norm_email, см. выше).
+drop index if exists public.invitations_studio_email_uidx;
+drop index if exists public.invitations_email_idx;
+create unique index if not exists invitations_studio_norm_email_uidx
+  on public.invitations(studio_id, public.norm_email(email));
+create index if not exists invitations_norm_email_idx
+  on public.invitations(public.norm_email(email));
 
 -- Кабинеты
 create table if not exists public.rooms (
@@ -312,12 +338,20 @@ create policy studios_write on public.studios
   using (id = public.current_studio_id() and public.is_director())
   with check (id = public.current_studio_id() and public.is_director());
 
--- profiles: все в студии видят коллег; правит только директор,
--- а сам пользователь может править свою запись (имя/цвет).
+-- profiles: все в студии видят коллег, а свою запись — даже отключённый
+-- (приложение покажет «доступ отключён»). Правит директор; сам пользователь —
+-- только имя и цвет (роль и доступ стережёт триггер profiles_guard, M9).
+-- Создаются профили только из приглашений, удалять из приложения нельзя:
+-- удаление стёрло бы каскадом занятия, посещаемость и оплаты.
 drop policy if exists profiles_select on public.profiles;
 create policy profiles_select on public.profiles
   for select to authenticated
   using (studio_id = public.current_studio_id());
+
+drop policy if exists profiles_select_self on public.profiles;
+create policy profiles_select_self on public.profiles
+  for select to authenticated
+  using (id = auth.uid());
 
 drop policy if exists profiles_update_self on public.profiles;
 create policy profiles_update_self on public.profiles
@@ -326,8 +360,9 @@ create policy profiles_update_self on public.profiles
   with check (id = auth.uid() and studio_id = public.current_studio_id());
 
 drop policy if exists profiles_admin_write on public.profiles;
-create policy profiles_admin_write on public.profiles
-  for all to authenticated
+drop policy if exists profiles_admin_update on public.profiles;
+create policy profiles_admin_update on public.profiles
+  for update to authenticated
   using (studio_id = public.current_studio_id() and public.is_director())
   with check (studio_id = public.current_studio_id() and public.is_director());
 
@@ -531,7 +566,9 @@ declare
 begin
   select * into inv
   from public.invitations
-  where lower(email) = lower(new.email)
+  where public.norm_email(email) = public.norm_email(new.email)
+    and expires_at > now()
+  order by created_at desc
   limit 1;
 
   if found then
@@ -581,14 +618,15 @@ begin
     return;
   end if;
 
-  select lower(u.email) into em from auth.users u where u.id = uid;
-  if em is null then
+  select public.norm_email(u.email) into em from auth.users u where u.id = uid;
+  if coalesce(em, '') = '' then
     return;
   end if;
 
   select * into inv
   from public.invitations
-  where lower(email) = em
+  where public.norm_email(email) = em and expires_at > now()
+  order by created_at desc
   limit 1;
 
   if found then
@@ -1003,8 +1041,9 @@ create trigger attendance_sync_session
 -- Supabase вызывает эту функцию перед созданием КАЖДОГО нового пользователя
 -- (Google, код на почту) — только если она включена в Dashboard:
 -- Authentication → Hooks → «Before User Created» → Postgres → public.before_user_created.
--- Пропускает, если почта есть в приглашениях (любой студии). Уже существующих
--- пользователей хук не касается — они входят как раньше.
+-- Пропускает, если почта есть в действующих приглашениях (любой студии;
+-- почты сравниваются через norm_email). Уже существующих пользователей хук
+-- не касается — они входят как раньше.
 -- Первый директор новой студии: создать студию и приглашение с role='director'
 -- (см. bootstrap.sql), затем войти этой почтой.
 -- ============================================================================
@@ -1017,10 +1056,18 @@ security definer
 set search_path = public
 as $$
 declare
-  em text := lower(trim(event->'user'->>'email'));
+  em text := public.norm_email(event->'user'->>'email');
 begin
-  if em <> '' and exists (select 1 from public.invitations where lower(email) = em) then
+  if em <> '' and exists (select 1 from public.invitations
+                          where public.norm_email(email) = em and expires_at > now()) then
     return '{}'::jsonb;
+  end if;
+
+  if em <> '' and exists (select 1 from public.invitations where public.norm_email(email) = em) then
+    return jsonb_build_object('error', jsonb_build_object(
+      'http_code', 403,
+      'message', 'Приглашение на эту почту истекло. Попросите директора продлить его в «Педагогах».'
+    ));
   end if;
 
   return jsonb_build_object('error', jsonb_build_object(
@@ -1465,3 +1512,211 @@ as $$
 $$;
 revoke all on function public.confirm_booking(uuid) from public, anon;
 grant execute on function public.confirm_booking(uuid) to authenticated;
+
+-- ============================================================================
+-- M9: роли и доступ
+--  * роль и доступ («Отключить») меняет только директор — педагог в своей
+--    записи правит лишь имя и цвет;
+--  * в студии всегда остаётся хотя бы один действующий директор;
+--  * профиль с занятиями не удалить (и пользователя Auth в Dashboard — тоже):
+--    каскад стёр бы расписание, посещаемость и оплаты; вместо — «Отключить»;
+--  * приглашение не заводится на почту того, кто уже в студии;
+--  * отключая человека, директор передаёт его занятия и учеников другому
+--    педагогу или отменяет их — одной операцией (disable_member).
+-- ============================================================================
+
+create or replace function public.profiles_guard()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  -- запрос из приложения (в SQL Editor пользователя нет — там можно всё,
+  -- кроме того, что ломает студию: удаления с историей и «ноль директоров»)
+  from_app boolean := auth.uid() is not null;
+  was_director boolean := old.role = 'director' and old.is_active;
+begin
+  -- студию удаляют целиком — её профили уходят вместе с ней
+  if not exists (select 1 from public.studios where id = old.studio_id) then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+
+  if tg_op = 'UPDATE' then
+    if from_app and (new.id <> old.id or new.studio_id <> old.studio_id
+                     or new.created_at <> old.created_at) then
+      raise exception 'Эти поля профиля менять нельзя';
+    end if;
+    if from_app and not public.is_director()
+       and (new.role <> old.role or new.is_active <> old.is_active) then
+      raise exception 'Роль и доступ меняет только директор';
+    end if;
+    if not was_director
+       or (new.role = 'director' and new.is_active and new.studio_id = old.studio_id) then
+      return new;
+    end if;
+  else
+    if exists (select 1 from public.lesson_series where teacher_id = old.id)
+       or exists (select 1 from public.sessions where teacher_id = old.id) then
+      raise exception 'У «%» есть занятия в расписании: удаление стёрло бы их вместе с посещаемостью и оплатами. Отключите доступ в «Педагогах».', old.full_name;
+    end if;
+    if not was_director then
+      return old;
+    end if;
+  end if;
+
+  -- уходит действующий директор: нужен ещё один (студию блокируем, чтобы
+  -- два директора не сняли друг друга одновременно)
+  perform 1 from public.studios where id = old.studio_id for update;
+  if not exists (select 1 from public.profiles
+                 where studio_id = old.studio_id and id <> old.id
+                   and role = 'director' and is_active) then
+    raise exception 'В студии должен остаться хотя бы один директор — сначала назначьте другого.';
+  end if;
+  return case when tg_op = 'DELETE' then old else new end;
+end;
+$$;
+
+drop trigger if exists profiles_guard on public.profiles;
+create trigger profiles_guard
+  before update or delete on public.profiles
+  for each row execute function public.profiles_guard();
+
+-- Приглашение: почта и имя без лишних пробелов; не на того, кто уже в студии
+-- (его приглашение никогда бы не сработало — роль меняется в «Педагогах»).
+create or replace function public.invitations_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  member_studio uuid;
+begin
+  new.email := lower(btrim(new.email));
+  new.full_name := btrim(new.full_name);
+  if new.email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then
+    raise exception 'Проверьте почту: нужен адрес вида name@gmail.com';
+  end if;
+  if new.full_name = '' then
+    raise exception 'Укажите имя';
+  end if;
+
+  select p.studio_id into member_studio
+  from auth.users u
+  join public.profiles p on p.id = u.id
+  where public.norm_email(u.email) = public.norm_email(new.email)
+  limit 1;
+  if member_studio = new.studio_id then
+    raise exception 'Этот человек уже в студии. Роль и доступ меняются в его строке в «Педагогах».';
+  elsif member_studio is not null then
+    raise exception 'Эта почта уже привязана к другой студии';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists invitations_before_write on public.invitations;
+create trigger invitations_before_write
+  before insert or update on public.invitations
+  for each row execute function public.invitations_before_write();
+
+-- Отключить человека (только директор, не себя). С его занятиями с p_from:
+--   'transfer' — передать педагогу p_to: серии продолжаются с ним (через
+--                update_series), разовые и уже отмеченные будущие — тоже;
+--                p_students — и учеников, у которых он основной педагог;
+--   'cancel'   — остановить серии и убрать будущие занятия без отметок
+--                (с отметками остаются — их решает директор);
+--   'keep'     — ничего не трогать.
+-- Возвращает, сколько затронуто, и пересечения у нового педагога.
+create or replace function public.disable_member(
+  p_member   uuid,
+  p_mode     text,
+  p_to       uuid,
+  p_from     date,
+  p_until    date,
+  p_students boolean
+)
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  sid uuid := public.current_studio_id();
+  r public.lesson_series%rowtype;
+  n_series int := 0;
+  n_sessions int := 0;
+  n_kept int := 0;
+  n_students int := 0;
+  n_conflicts int := 0;
+begin
+  if not public.is_director() then
+    raise exception 'Отключать может только директор';
+  end if;
+  if p_member = auth.uid() then
+    raise exception 'Себя отключить нельзя';
+  end if;
+  if not exists (select 1 from public.profiles where id = p_member and studio_id = sid) then
+    raise exception 'Человек не из этой студии';
+  end if;
+  if p_mode not in ('transfer', 'cancel', 'keep') then
+    raise exception 'Неизвестный способ: %', p_mode;
+  end if;
+  if p_mode = 'transfer' and (p_to is null or p_to = p_member or not exists (
+       select 1 from public.profiles where id = p_to and studio_id = sid and is_active)) then
+    raise exception 'Выберите, кому передать занятия';
+  end if;
+
+  if p_mode <> 'keep' then
+    select count(*) into n_sessions from public.sessions
+    where teacher_id = p_member and date >= p_from and status <> 'cancelled';
+
+    for r in
+      select * from public.lesson_series
+      where teacher_id = p_member and studio_id = sid and is_active
+        and (end_date is null or end_date >= p_from)
+    loop
+      if p_mode = 'transfer' then
+        perform public.update_series(r.id, p_from, p_to, r.room_id, r.weekday,
+                                     r.start_time, r.duration_min, r.end_date, p_until);
+      else
+        perform public.stop_series(r.id, p_from);
+      end if;
+      n_series := n_series + 1;
+    end loop;
+
+    if p_mode = 'transfer' then
+      -- разовые и уцелевшие (с отметками) будущие занятия
+      update public.sessions set teacher_id = p_to
+      where teacher_id = p_member and date >= p_from and status <> 'cancelled';
+      if p_students then
+        update public.students set main_teacher_id = p_to
+        where main_teacher_id = p_member and studio_id = sid;
+        get diagnostics n_students = row_count;
+      end if;
+      select count(*) into n_conflicts
+      from public.sessions a
+      join public.sessions b
+        on b.teacher_id = a.teacher_id and b.date = a.date and a.id < b.id
+      where a.teacher_id = p_to and a.date between p_from and p_until
+        and a.status <> 'cancelled' and b.status <> 'cancelled'
+        and a.start_time < b.start_time + make_interval(mins => b.duration_min)
+        and b.start_time < a.start_time + make_interval(mins => a.duration_min);
+    else
+      delete from public.sessions s
+      where s.teacher_id = p_member and s.date >= p_from and s.status = 'scheduled'
+        and not exists (select 1 from public.attendance a where a.session_id = s.id);
+      select count(*) into n_kept from public.sessions
+      where teacher_id = p_member and date >= p_from and status <> 'cancelled';
+    end if;
+  end if;
+
+  update public.profiles set is_active = false where id = p_member;
+
+  return jsonb_build_object('series', n_series, 'sessions', n_sessions, 'kept', n_kept,
+                            'students', n_students, 'conflicts', n_conflicts);
+end;
+$$;
+
+revoke all on function public.disable_member(uuid, text, uuid, date, date, boolean) from public, anon;
+grant execute on function public.disable_member(uuid, text, uuid, date, date, boolean) to authenticated;

@@ -41,7 +41,8 @@ function DirectorHome() {
         supabase
           .from('profiles')
           .select('id', { count: 'exact', head: true })
-          .eq('role', 'teacher'),
+          .eq('role', 'teacher')
+          .eq('is_active', true),
         supabase
           .from('invitations')
           .select('id', { count: 'exact', head: true }),
