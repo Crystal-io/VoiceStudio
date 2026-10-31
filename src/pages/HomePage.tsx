@@ -119,7 +119,7 @@ function DirectorHome() {
   )
 }
 
-/** Загрузка кабинетов, табло для холла и (директору) часы работы и праздники. */
+/** Сетка кабинетов, табло для холла и (директору) часы работы и праздники. */
 function RoomsLinks({ director = false }: { director?: boolean }) {
   return (
     <section className="space-y-2">
@@ -128,8 +128,8 @@ function RoomsLinks({ director = false }: { director?: boolean }) {
         <ReportRow
           to="/schedule?view=rooms"
           icon={<DoorIcon className="size-5" />}
-          title="Загрузка кабинетов"
-          value="неделя, свободные окна, брони"
+          title="Кабинеты по времени"
+          value="кто где, свободные окна, брони"
         />
         <ReportRow
           to="/board"

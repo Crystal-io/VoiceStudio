@@ -24,11 +24,10 @@ import { LessonCard } from '@/components/schedule/LessonCard'
 import { NewLessonModal } from '@/components/schedule/NewLessonModal'
 import { LessonDialogs } from '@/components/schedule/LessonDialogs'
 import { RoomGrid } from '@/components/schedule/RoomGrid'
-import { RoomHeatmap } from '@/components/schedule/RoomHeatmap'
 import { BookingModal, BookingSheet } from '@/components/schedule/BookingDialogs'
 
 /**
- * rooms — загрузка кабинетов за неделю и сетка «кабинет × время» за день.
+ * rooms — сетка «кабинет × время» за день.
  * Видна всем: директору — все занятия, педагогу — свои, чужие как «занято».
  */
 type View = 'day' | 'week' | 'rooms'
@@ -252,14 +251,8 @@ export function SchedulePage() {
         </div>
       ) : view === 'rooms' && profile ? (
         <div className="space-y-4">
-          <RoomHeatmap
-            days={days}
-            sessions={sessions}
-            bookings={bookings}
-            dir={dir}
-            selected={date}
-            onSelect={(d) => update({ date: d })}
-          />
+          {/* таблица «Загрузка кабинетов» (RoomHeatmap, расчёт roomLoad) убрана
+              с экрана по решению директора — код оставлен */}
           <section className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <DayHeading date={date} today={today} dir={dir} />
