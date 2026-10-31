@@ -271,10 +271,13 @@ export function ErrorNote({ text }: { text: string }) {
 
 export function Modal({
   title,
+  aside,
   onClose,
   children,
 }: {
   title: string
+  /** справа от заголовка, перед «закрыть» */
+  aside?: ReactNode
   onClose: () => void
   children: ReactNode
 }) {
@@ -295,13 +298,15 @@ export function Modal({
         className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-xl sm:rounded-3xl dark:bg-slate-900"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{title}</h2>
+        {/* по первой строке заголовка: длинный переносится, «закрыть» остаётся вверху */}
+        <div className="mb-4 flex items-start gap-3">
+          <h2 className="min-w-0 flex-1 py-0.5 text-lg font-semibold text-balance">{title}</h2>
+          {aside && <div className="flex h-8 min-w-0 max-w-[45%] items-center">{aside}</div>}
           <button
             type="button"
             onClick={onClose}
             aria-label="Закрыть"
-            className="flex size-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
           >
             <CloseIcon className="size-5" />
           </button>

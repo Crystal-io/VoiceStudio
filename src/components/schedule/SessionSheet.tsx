@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
 import type { Attendance, AttendanceStatus, LessonSeries, Session } from '@/lib/types'
-import { formatDayMonth, hhmm, timeRange, todayISO, weekdayOf, WEEKDAYS_EVERY, WEEKDAYS_SHORT } from '@/lib/dates'
+import { formatDayMonth, timeRange, todayISO, weekdayOf, WEEKDAYS_EVERY, WEEKDAYS_SHORT } from '@/lib/dates'
 import { attendanceColumns, nobodyCame, rosterOf } from '@/lib/attendance'
 import { lessonTitle, seriesColumns, teacherColor, toSeries } from '@/lib/schedule'
 import { Button, ErrorNote, Modal, Spinner } from '@/components/ui'
@@ -177,7 +177,20 @@ export function SessionSheet({
   }
 
   return (
-    <Modal title={lessonTitle(session, dir)} onClose={onClose}>
+    <Modal
+      title={lessonTitle(session, dir)}
+      aside={
+        <span className="flex min-w-0 items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300">
+          <span
+            className="size-2.5 shrink-0 rounded-full"
+            style={{ background: teacherColor(teacher) }}
+            aria-hidden
+          />
+          <span className="truncate">{teacher?.full_name ?? 'Педагог'}</span>
+        </span>
+      }
+      onClose={onClose}
+    >
       <div className="space-y-4">
         {cancelled && (
           <div className="rounded-xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
@@ -185,7 +198,7 @@ export function SessionSheet({
           </div>
         )}
 
-        {/* два столбца: когда | во сколько, кто | где; повтор — строкой ниже */}
+        {/* два столбца: когда | во сколько, где | как часто; педагог — в шапке */}
         <ul className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
           <InfoRow icon={<CalendarIcon className="size-4" />}>
             {WEEKDAYS_SHORT[weekdayOf(session.date)]}, {formatDayMonth(session.date)}
@@ -198,23 +211,9 @@ export function SessionSheet({
           <InfoRow icon={<ClockIcon className="size-4" />}>
             {timeRange(session.start_time, session.duration_min)}
           </InfoRow>
-          <InfoRow
-            icon={
-              <span
-                className="block size-2.5 rounded-full"
-                style={{ background: teacherColor(teacher) }}
-              />
-            }
-          >
-            {teacher?.full_name ?? 'Педагог'}
-          </InfoRow>
           <InfoRow icon={<DoorIcon className="size-4" />}>{room ?? 'Без кабинета'}</InfoRow>
-          <InfoRow icon={<RepeatIcon className="size-4" />} wide muted>
-            {!session.series_id
-              ? 'Разовое занятие'
-              : series
-                ? seriesText(series)
-                : 'Повторяющееся занятие'}
+          <InfoRow icon={<RepeatIcon className="size-4" />} muted>
+            {!session.series_id ? 'Разовое' : series ? seriesText(series) : 'Повторяется'}
           </InfoRow>
         </ul>
         {solo && (solo.parent_name || solo.parent_phone) && <ParentContact student={solo} />}
@@ -324,18 +323,15 @@ export function SessionSheet({
 
 function InfoRow({
   icon,
-  wide,
   muted,
   children,
 }: {
   icon: ReactNode
-  /** на всю ширину, а не в половину */
-  wide?: boolean
   muted?: boolean
   children: ReactNode
 }) {
   return (
-    <li className={`flex items-start gap-2 ${wide ? 'col-span-2' : ''}`}>
+    <li className="flex items-start gap-2">
       <span className="flex h-5 w-4 shrink-0 items-center justify-center text-slate-400">
         {icon}
       </span>
@@ -350,9 +346,9 @@ function InfoRow({
   )
 }
 
-/** «каждый вторник в 15:00, с 1 сентября по 31 мая» */
+/** «Каждый вторник», «Каждый вторник до 31 мая» — время уже в соседней клетке. */
 function seriesText(s: LessonSeries): string {
-  let text = `${WEEKDAYS_EVERY[s.weekday]} в ${hhmm(s.start_time)}, с ${formatDayMonth(s.start_date)}`
-  if (s.end_date) text += ` по ${formatDayMonth(s.end_date)}`
+  let text = WEEKDAYS_EVERY[s.weekday]
+  if (s.end_date) text += ` до ${formatDayMonth(s.end_date)}`
   return text.charAt(0).toUpperCase() + text.slice(1)
 }

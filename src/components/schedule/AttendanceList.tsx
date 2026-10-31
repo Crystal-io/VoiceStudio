@@ -27,16 +27,6 @@ const MARK_LOOK: Record<Mark, string> = {
   none: 'border border-dashed border-slate-400 text-slate-500 dark:border-slate-500 dark:text-slate-400',
 }
 
-function MarkLabel({ mark, icon }: { mark: Mark; icon: string }) {
-  return (
-    <>
-      {mark === 'in' && <CheckIcon className={icon} />}
-      {mark === 'out' && <CloseIcon className={icon} />}
-      {mark === 'in' ? 'Есть' : mark === 'out' ? 'Нет' : 'Есть?'}
-    </>
-  )
-}
-
 /**
  * Список детей занятия: у каждого две кнопки — «есть/нет» и «оплачено»,
  * обе в одно касание.
@@ -84,21 +74,6 @@ export function AttendanceList({
         )}
       </div>
 
-      {roster.length > 0 && canMarkStatus && (
-        <p className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-          <span>Нажимайте по кругу:</span>
-          {(['none', 'in', 'out'] as const).map((m, i) => (
-            <span key={m} className="inline-flex items-center gap-1.5">
-              {i > 0 && <span aria-hidden>→</span>}
-              <span
-                className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 font-semibold ${MARK_LOOK[m]}`}
-              >
-                <MarkLabel mark={m} icon="size-3" />
-              </span>
-            </span>
-          ))}
-        </p>
-      )}
       {roster.length > 0 && !canMarkStatus && canTogglePaid && (
         <p className="text-xs text-slate-500 dark:text-slate-400">
           Посещение отмечается в день занятия, а оплату можно отметить заранее.
@@ -172,7 +147,9 @@ function MarkButton({
         mark === 'none' ? 'hover:bg-slate-100 dark:hover:bg-slate-800' : ''
       }`}
     >
-      <MarkLabel mark={mark} icon="size-4" />
+      {mark === 'in' && <CheckIcon className="size-4" />}
+      {mark === 'out' && <CloseIcon className="size-4" />}
+      {mark === 'in' ? 'Есть' : mark === 'out' ? 'Нет' : 'Есть?'}
     </button>
   )
 }
