@@ -2,8 +2,8 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
 import type { Attendance, AttendanceStatus, LessonSeries, Session } from '@/lib/types'
-import { formatDayLong, formatDayMonth, hhmm, timeRange, todayISO, WEEKDAYS_EVERY } from '@/lib/dates'
-import { attendanceColumns, rosterOf } from '@/lib/attendance'
+import { formatDayMonth, hhmm, timeRange, todayISO, weekdayOf, WEEKDAYS_EVERY, WEEKDAYS_SHORT } from '@/lib/dates'
+import { attendanceColumns, nobodyCame, rosterOf } from '@/lib/attendance'
 import { lessonTitle, seriesColumns, teacherColor, toSeries } from '@/lib/schedule'
 import { Button, ErrorNote, Modal, Spinner } from '@/components/ui'
 import { AttendanceList } from '@/components/schedule/AttendanceList'
@@ -78,8 +78,10 @@ export function SessionSheet({
   const teacher = dir.profileById.get(session.teacher_id)
   const room = session.room_id ? dir.roomById.get(session.room_id)?.name : null
   const cancelled = session.status === 'cancelled'
-  // «проведено» база ставит сама по отметкам — здесь повторяем это локально
-  const done = rows ? rows.some((r) => r.status) : session.status === 'done'
+  // «проведено» / «не состоялось» база ставит сама по отметкам — здесь
+  // повторяем это локально
+  const done = rows ? rows.some((r) => r.status) : session.status === 'done' || session.status === 'missed'
+  const missed = !cancelled && !!rows && nobodyCame(rows)
   const moved = !!session.occurrence_date && session.occurrence_date !== session.date
   const roster = rosterOf(session, dir, rows ?? [])
   // занятие с одним учеником — сразу под рукой контакт родителя
@@ -183,30 +185,31 @@ export function SessionSheet({
           </div>
         )}
 
-        <ul className="space-y-2.5 text-sm">
-          <InfoRow icon={<CalendarIcon className="size-5" />}>
-            <span className="block first-letter:uppercase">{formatDayLong(session.date)}</span>
+        {/* два столбца: когда | во сколько, кто | где; повтор — строкой ниже */}
+        <ul className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+          <InfoRow icon={<CalendarIcon className="size-4" />}>
+            {WEEKDAYS_SHORT[weekdayOf(session.date)]}, {formatDayMonth(session.date)}
             {moved && (
-              <span className="block text-amber-600 dark:text-amber-400">
+              <span className="block text-xs text-amber-600 dark:text-amber-400">
                 перенесено с {formatDayMonth(session.occurrence_date!)}
               </span>
             )}
           </InfoRow>
-          <InfoRow icon={<ClockIcon className="size-5" />}>
-            {timeRange(session.start_time, session.duration_min)} · {session.duration_min} мин
+          <InfoRow icon={<ClockIcon className="size-4" />}>
+            {timeRange(session.start_time, session.duration_min)}
           </InfoRow>
           <InfoRow
             icon={
               <span
-                className="block size-3 rounded-full"
+                className="block size-2.5 rounded-full"
                 style={{ background: teacherColor(teacher) }}
               />
             }
           >
             {teacher?.full_name ?? 'Педагог'}
           </InfoRow>
-          <InfoRow icon={<DoorIcon className="size-5" />}>{room ?? 'Без кабинета'}</InfoRow>
-          <InfoRow icon={<RepeatIcon className="size-5" />}>
+          <InfoRow icon={<DoorIcon className="size-4" />}>{room ?? 'Без кабинета'}</InfoRow>
+          <InfoRow icon={<RepeatIcon className="size-4" />} wide muted>
             {!session.series_id
               ? 'Разовое занятие'
               : series
@@ -232,6 +235,18 @@ export function SessionSheet({
               <Spinner />
             </div>
           ))}
+
+        {/* под списком, а не над ним — чтобы строки не прыгали под пальцем */}
+        {missed && (
+          <div className="rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-600 dark:bg-slate-800/60 dark:text-slate-300">
+            <p className="font-semibold text-slate-800 dark:text-slate-100">
+              Никто не пришёл — занятие не состоялось
+            </p>
+            <p className="mt-0.5">
+              Оно не идёт в нагрузку педагога. Если кто-то всё же был — отметьте «Есть».
+            </p>
+          </div>
+        )}
 
         {error && <ErrorNote text={error} />}
 
@@ -307,13 +322,30 @@ export function SessionSheet({
   )
 }
 
-function InfoRow({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+function InfoRow({
+  icon,
+  wide,
+  muted,
+  children,
+}: {
+  icon: ReactNode
+  /** на всю ширину, а не в половину */
+  wide?: boolean
+  muted?: boolean
+  children: ReactNode
+}) {
   return (
-    <li className="flex items-start gap-3">
-      <span className="flex size-5 shrink-0 items-center justify-center text-slate-400">
+    <li className={`flex items-start gap-2 ${wide ? 'col-span-2' : ''}`}>
+      <span className="flex h-5 w-4 shrink-0 items-center justify-center text-slate-400">
         {icon}
       </span>
-      <span className="min-w-0 flex-1 text-slate-700 dark:text-slate-200">{children}</span>
+      <span
+        className={`min-w-0 flex-1 break-words ${
+          muted ? 'text-slate-500 dark:text-slate-400' : 'text-slate-700 dark:text-slate-200'
+        }`}
+      >
+        {children}
+      </span>
     </li>
   )
 }

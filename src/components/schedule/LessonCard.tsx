@@ -2,7 +2,7 @@ import type { Directory } from '@/lib/directory'
 import type { Attendance, Session } from '@/lib/types'
 import { fromMinutes, hhmm, toMinutes } from '@/lib/dates'
 import { isGroupLesson, lessonTitle, teacherColor } from '@/lib/schedule'
-import { attendanceSummary, isUnmarked, rosterOf } from '@/lib/attendance'
+import { attendanceSummary, isUnmarked, nobodyCame, rosterOf } from '@/lib/attendance'
 import { UsersIcon } from '@/components/icons'
 
 /** Карточка занятия в списке: время, кого учим, кабинет, педагог, отметки. */
@@ -22,6 +22,8 @@ export function LessonCard({
   const teacher = dir.profileById.get(session.teacher_id)
   const room = session.room_id ? dir.roomById.get(session.room_id)?.name : null
   const cancelled = session.status === 'cancelled'
+  // никто не пришёл: статус ставит база, отметки — на случай, если список ещё не перечитан
+  const missed = !cancelled && (session.status === 'missed' || nobodyCame(attendance))
   const moved = !!session.occurrence_date && session.occurrence_date !== session.date
   const group = isGroupLesson(session)
   const groupSize = group ? rosterOf(session, dir, attendance).length : null
@@ -29,11 +31,13 @@ export function LessonCard({
   const summary = attendanceSummary(session, dir, attendance)
   const badge = cancelled
     ? { text: 'отменено', cls: 'bg-rose-50 text-rose-600 dark:bg-rose-950/50 dark:text-rose-300' }
-    : isUnmarked(session)
-      ? { text: 'не отмечено', cls: 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' }
-      : moved && session.status !== 'done'
-        ? { text: 'перенесено', cls: 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' }
-        : null
+    : missed
+      ? { text: 'не состоялось', cls: 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400' }
+      : isUnmarked(session)
+        ? { text: 'не отмечено', cls: 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' }
+        : moved && session.status !== 'done'
+          ? { text: 'перенесено', cls: 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' }
+          : null
 
   const details = [room ?? 'Без кабинета', showTeacher ? teacher?.full_name : null]
     .filter(Boolean)
@@ -44,7 +48,7 @@ export function LessonCard({
       type="button"
       onClick={onClick}
       className={`flex w-full items-stretch gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-slate-200 transition hover:ring-brand-300 dark:bg-slate-900 dark:ring-slate-800 dark:hover:ring-brand-700 ${
-        cancelled ? 'opacity-60' : ''
+        cancelled || missed ? 'opacity-60' : ''
       }`}
     >
       <span

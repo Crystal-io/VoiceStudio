@@ -196,8 +196,9 @@ create table if not exists public.sessions (
   date          date not null,
   start_time    time not null,
   duration_min  int  not null default 45 check (duration_min > 0),
+  -- missed = «не состоялось»: отметки есть, но никто не пришёл (см. M4)
   status        text not null default 'scheduled'
-                  check (status in ('scheduled','done','cancelled')),
+                  check (status in ('scheduled','done','missed','cancelled')),
   note          text,
   created_at    timestamptz not null default now()
 );
@@ -973,12 +974,19 @@ $$;
 -- M4: Посещаемость и оплата
 --  * строка attendance = ребёнок × занятие: статус посещения и флаг оплаты;
 --  * статус может быть пустым — оплату отмечают и отдельно (например, заранее);
---  * занятие становится «проведено» (done), как только у кого-то отмечен
---    статус, и возвращается в «запланировано», если отметки сняли.
+--  * занятие становится «проведено» (done), как только хоть кто-то пришёл;
+--    «не состоялось» (missed), если отметки есть, но никто не пришёл, —
+--    такое занятие не идёт в нагрузку педагога; без отметок — снова
+--    «запланировано».
 -- ============================================================================
 
 alter table public.attendance alter column status drop not null;
 alter table public.attendance alter column status drop default;
+
+-- статус «не состоялось» (в базах, созданных до него, проверка была без missed)
+alter table public.sessions drop constraint if exists sessions_status_check;
+alter table public.sessions add constraint sessions_status_check
+  check (status in ('scheduled','done','missed','cancelled'));
 
 -- Перед записью: студия — из занятия, ученик — из той же студии,
 -- кто и когда отметил — текущий пользователь и время.
@@ -1007,7 +1015,9 @@ create trigger attendance_before_write
   before insert or update on public.attendance
   for each row execute function public.attendance_before_write();
 
--- После записи: статус занятия следует за отметками.
+-- После записи: статус занятия следует за отметками. Хоть кто-то пришёл
+-- (есть / опоздание) — проведено; отметки есть, но все «нет» — не состоялось;
+-- отметок нет — запланировано. Отменённое не трогаем.
 create or replace function public.attendance_sync_session()
 returns trigger
 language plpgsql
@@ -1017,12 +1027,16 @@ declare
   sid uuid := coalesce(new.session_id, old.session_id);
 begin
   if exists (select 1 from public.attendance
-             where session_id = sid and status is not null) then
+             where session_id = sid and status in ('present','late')) then
     update public.sessions set status = 'done'
-    where id = sid and status = 'scheduled';
+    where id = sid and status in ('scheduled','missed');
+  elsif exists (select 1 from public.attendance
+                where session_id = sid and status is not null) then
+    update public.sessions set status = 'missed'
+    where id = sid and status in ('scheduled','done');
   else
     update public.sessions set status = 'scheduled'
-    where id = sid and status = 'done';
+    where id = sid and status in ('done','missed');
   end if;
   return null;
 end;
@@ -1032,6 +1046,15 @@ drop trigger if exists attendance_sync_session on public.attendance;
 create trigger attendance_sync_session
   after insert or update or delete on public.attendance
   for each row execute function public.attendance_sync_session();
+
+-- Уже проведённые, где никто не пришёл, — «не состоялось» (один раз после
+-- появления статуса; повторный запуск ничего не меняет).
+update public.sessions s set status = 'missed'
+where s.status = 'done'
+  and exists (select 1 from public.attendance a
+              where a.session_id = s.id and a.status is not null)
+  and not exists (select 1 from public.attendance a
+                  where a.session_id = s.id and a.status in ('present','late'));
 
 -- ============================================================================
 -- M6: вход только по приглашению

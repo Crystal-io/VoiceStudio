@@ -116,6 +116,12 @@ export function isOver(session: Session): boolean {
   return toMinutes(session.start_time) + session.duration_min <= now.getHours() * 60 + now.getMinutes()
 }
 
+/** Отметки есть, но никто не пришёл — занятие не состоялось. */
+export function nobodyCame(rows: Attendance[]): boolean {
+  const marked = rows.filter((r) => r.status)
+  return marked.length > 0 && !marked.some((r) => came(r.status))
+}
+
 /** Прошедшее, не отменённое и без единой отметки посещения. */
 export function isUnmarked(session: Session): boolean {
   return session.status === 'scheduled' && isOver(session)
@@ -137,19 +143,20 @@ export function attendanceSummary(
     if (!row) return null
     const parts: string[] = []
     if (row.status) parts.push(STATUS_TEXT[row.status])
+    // «не оплачено» — только если был: за пропуск не платят
     if (row.is_paid) parts.push('оплачено')
-    else if (row.status) parts.push('не оплачено')
+    else if (came(row.status)) parts.push('не оплачено')
     const text = parts.join(' · ')
     return {
       text: text.charAt(0).toUpperCase() + text.slice(1),
-      tone: row.is_paid ? 'ok' : 'warn',
+      tone: row.is_paid ? 'ok' : came(row.status) ? 'warn' : 'muted',
     }
   }
 
   if (marked.length === 0 && paid === 0) return null
-  const came = marked.filter((r) => r.status === 'present' || r.status === 'late').length
+  const cameCount = marked.filter((r) => came(r.status)).length
   const parts: string[] = []
-  if (marked.length > 0) parts.push(`Были ${came} из ${total}`)
+  if (marked.length > 0) parts.push(`Были ${cameCount} из ${total}`)
   parts.push(`оплатили ${paid}${marked.length === 0 ? ` из ${total}` : ''}`)
   const text = parts.join(' · ')
   return { text: text.charAt(0).toUpperCase() + text.slice(1), tone: paid >= total ? 'ok' : 'muted' }

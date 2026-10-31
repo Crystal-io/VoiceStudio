@@ -13,6 +13,30 @@ function nextStatus(status: AttendanceStatus | null): AttendanceStatus | null {
   return came(status) ? 'absent' : null
 }
 
+/** Как отметка выглядит на кнопке: пришёл, не пришёл, ещё не отмечен. */
+type Mark = 'in' | 'out' | 'none'
+
+function markOf(status: AttendanceStatus | null): Mark {
+  return !status ? 'none' : came(status) ? 'in' : 'out'
+}
+
+const MARK_LOOK: Record<Mark, string> = {
+  in: 'bg-emerald-600 text-white',
+  out: 'bg-rose-600 text-white',
+  // пунктир — «ещё не спросили», как перекличка: «Петрова?» — «Есть!»
+  none: 'border border-dashed border-slate-400 text-slate-500 dark:border-slate-500 dark:text-slate-400',
+}
+
+function MarkLabel({ mark, icon }: { mark: Mark; icon: string }) {
+  return (
+    <>
+      {mark === 'in' && <CheckIcon className={icon} />}
+      {mark === 'out' && <CloseIcon className={icon} />}
+      {mark === 'in' ? 'Есть' : mark === 'out' ? 'Нет' : 'Есть?'}
+    </>
+  )
+}
+
 /**
  * Список детей занятия: у каждого две кнопки — «есть/нет» и «оплачено»,
  * обе в одно касание.
@@ -37,11 +61,6 @@ export function AttendanceList({
   const rowOf = (id: string) => rows.find((r) => r.student_id === id)
   const unmarked = roster.filter((s) => !rowOf(s.id)?.status).length
   const paid = roster.filter((s) => rowOf(s.id)?.is_paid).length
-  const hint = canMarkStatus
-    ? 'Касание по «Есть»: есть → нет → снять отметку.'
-    : canTogglePaid
-      ? 'Посещение отмечается в день занятия, а оплату можно отметить заранее.'
-      : null
 
   return (
     <section className="space-y-2">
@@ -65,8 +84,25 @@ export function AttendanceList({
         )}
       </div>
 
-      {roster.length > 0 && hint && (
-        <p className="text-xs text-slate-500 dark:text-slate-400">{hint}</p>
+      {roster.length > 0 && canMarkStatus && (
+        <p className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+          <span>Нажимайте по кругу:</span>
+          {(['none', 'in', 'out'] as const).map((m, i) => (
+            <span key={m} className="inline-flex items-center gap-1.5">
+              {i > 0 && <span aria-hidden>→</span>}
+              <span
+                className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 font-semibold ${MARK_LOOK[m]}`}
+              >
+                <MarkLabel mark={m} icon="size-3" />
+              </span>
+            </span>
+          ))}
+        </p>
+      )}
+      {roster.length > 0 && !canMarkStatus && canTogglePaid && (
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Посещение отмечается в день занятия, а оплату можно отметить заранее.
+        </p>
       )}
 
       {roster.length === 0 ? (
@@ -125,24 +161,18 @@ function MarkButton({
   name: string
   onClick: () => void
 }) {
-  const mark = !status ? null : came(status) ? 'in' : 'out'
+  const mark = markOf(status)
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       aria-label={`${name}: ${mark === 'in' ? 'есть' : mark === 'out' ? 'нет' : 'без отметки'}`}
-      className={`inline-flex h-10 w-16 shrink-0 items-center justify-center gap-1 rounded-xl text-sm font-semibold transition disabled:opacity-40 ${
-        mark === 'in'
-          ? 'bg-emerald-600 text-white'
-          : mark === 'out'
-            ? 'bg-rose-600 text-white'
-            : 'text-slate-600 ring-1 ring-slate-300 hover:bg-slate-100 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800'
+      className={`inline-flex h-10 w-[4.5rem] shrink-0 items-center justify-center gap-1 rounded-xl text-sm font-semibold transition disabled:opacity-40 ${MARK_LOOK[mark]} ${
+        mark === 'none' ? 'hover:bg-slate-100 dark:hover:bg-slate-800' : ''
       }`}
     >
-      {mark === 'in' && <CheckIcon className="size-4" />}
-      {mark === 'out' && <CloseIcon className="size-4" />}
-      {mark === 'out' ? 'Нет' : 'Есть'}
+      <MarkLabel mark={mark} icon="size-4" />
     </button>
   )
 }

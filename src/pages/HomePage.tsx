@@ -201,12 +201,14 @@ function ReportsSummary() {
       await ensureSessions(to)
       const [week, debts] = await Promise.all([loadSessions(from, to), loadDebts()])
       const live = week.sessions.filter((s) => s.status !== 'cancelled')
+      // несостоявшиеся (никто не пришёл) — не нагрузка, но пропуски в посещаемости
+      const held = live.filter((s) => s.status !== 'missed')
       const att = await loadAttendance(live.map((s) => s.id))
       const statuses = [...att.bySession.values()].flat().filter((r) => r.status)
       if (!alive) return
       setSum({
-        lessons: live.length,
-        minutes: live.reduce((n, s) => n + s.duration_min, 0),
+        lessons: held.length,
+        minutes: held.reduce((n, s) => n + s.duration_min, 0),
         rate: percent(statuses.filter((r) => came(r.status)).length, statuses.length),
         debts: debts.debts.length,
       })

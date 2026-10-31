@@ -34,18 +34,23 @@ export function shiftPeriod(p: Period, step: number): Period {
 // ---------------------------------------------------------------------------
 
 /**
- * Состояние занятия для отчёта: проведено (есть отметки), не отмечено
- * (прошло, но отметок нет), впереди, отменено.
+ * Состояние занятия для отчёта: проведено (хоть кто-то пришёл), не
+ * состоялось (никто не пришёл), не отмечено (прошло, но отметок нет),
+ * впереди, отменено.
  */
-export type LessonState = 'done' | 'unmarked' | 'planned' | 'cancelled'
+export type LessonState = 'done' | 'missed' | 'unmarked' | 'planned' | 'cancelled'
 
 export function lessonState(s: Session): LessonState {
   if (s.status === 'cancelled') return 'cancelled'
   if (s.status === 'done') return 'done'
+  if (s.status === 'missed') return 'missed'
   return isOver(s) ? 'unmarked' : 'planned'
 }
 
-/** Сводка по набору занятий. Минуты и число — без отменённых. */
+/**
+ * Сводка по набору занятий. Минуты и число — без отменённых и
+ * несостоявшихся: в нагрузку педагога они не идут.
+ */
 export type Tally = {
   count: number
   minutes: number
@@ -63,8 +68,8 @@ function emptyTally(): Tally {
     minutes: 0,
     individual: 0,
     group: 0,
-    byState: { done: 0, unmarked: 0, planned: 0, cancelled: 0 },
-    minutesByState: { done: 0, unmarked: 0, planned: 0, cancelled: 0 },
+    byState: { done: 0, missed: 0, unmarked: 0, planned: 0, cancelled: 0 },
+    minutesByState: { done: 0, missed: 0, unmarked: 0, planned: 0, cancelled: 0 },
   }
 }
 
@@ -72,7 +77,7 @@ function add(t: Tally, s: Session) {
   const state = lessonState(s)
   t.byState[state] += 1
   t.minutesByState[state] += s.duration_min
-  if (state === 'cancelled') return
+  if (state === 'cancelled' || state === 'missed') return
   t.count += 1
   t.minutes += s.duration_min
   if (isGroupLesson(s)) t.group += 1

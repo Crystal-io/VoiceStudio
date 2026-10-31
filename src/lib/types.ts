@@ -67,7 +67,8 @@ export type GroupMember = {
   student_id: string
 }
 
-export type SessionStatus = 'scheduled' | 'done' | 'cancelled'
+/** missed — «не состоялось»: отметки есть, но никто не пришёл (ставит база). */
+export type SessionStatus = 'scheduled' | 'done' | 'missed' | 'cancelled'
 
 /**
  * Шаблон повторяющегося занятия: «каждый вторник 15:00».

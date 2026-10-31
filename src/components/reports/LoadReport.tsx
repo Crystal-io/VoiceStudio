@@ -151,6 +151,7 @@ function StateLine({ t, withCount = true }: { t: Tally; withCount?: boolean }) {
       cls: 'font-medium text-amber-600 dark:text-amber-400',
     },
     t.byState.planned > 0 && { text: `впереди ${t.byState.planned}`, cls: '' },
+    t.byState.missed > 0 && { text: `не состоялось ${t.byState.missed}`, cls: 'text-slate-400' },
     t.byState.cancelled > 0 && { text: `отменено ${t.byState.cancelled}`, cls: 'text-slate-400' },
   ].filter((p): p is { text: string; cls: string } => !!p)
   return (
