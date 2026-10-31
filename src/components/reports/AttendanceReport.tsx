@@ -67,7 +67,10 @@ export function AttendanceReport({
           parts={STATUS_OPTIONS.map((o) => ({ value: report.counts[o.value], className: o.on }))}
         />
         <Legend
-          items={STATUS_OPTIONS.map((o) => ({
+          // «опоздание» и «уважительная» на карточке больше не ставят — в легенде только если были
+          items={STATUS_OPTIONS.filter(
+            (o) => o.value === 'present' || o.value === 'absent' || report.counts[o.value] > 0,
+          ).map((o) => ({
             label: `${o.label} ${report.counts[o.value]}`,
             className: o.on,
           }))}

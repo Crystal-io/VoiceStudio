@@ -1,12 +1,21 @@
 import type { Attendance, AttendanceStatus, Student } from '@/lib/types'
-import { STATUS_OPTIONS } from '@/lib/attendance'
+import { came } from '@/lib/attendance'
 import { Badge } from '@/components/ui'
 import { StudentAvatar } from '@/components/students/StudentAvatar'
-import { CheckIcon } from '@/components/icons'
+import { CheckIcon, CloseIcon } from '@/components/icons'
 
 /**
- * Список детей занятия: статус в одно касание и флаг «оплачено».
- * Повторное касание выбранного статуса снимает отметку.
+ * Следующая отметка по касанию: без отметки → есть → нет → без отметки.
+ * Старые «опоздание» и «уважительная» идут как «есть» и «нет».
+ */
+function nextStatus(status: AttendanceStatus | null): AttendanceStatus | null {
+  if (!status) return 'present'
+  return came(status) ? 'absent' : null
+}
+
+/**
+ * Список детей занятия: у каждого две кнопки — «есть/нет» и «оплачено»,
+ * обе в одно касание.
  */
 export function AttendanceList({
   roster,
@@ -28,12 +37,17 @@ export function AttendanceList({
   const rowOf = (id: string) => rows.find((r) => r.student_id === id)
   const unmarked = roster.filter((s) => !rowOf(s.id)?.status).length
   const paid = roster.filter((s) => rowOf(s.id)?.is_paid).length
+  const hint = canMarkStatus
+    ? 'Касание по «Есть»: есть → нет → снять отметку.'
+    : canTogglePaid
+      ? 'Посещение отмечается в день занятия, а оплату можно отметить заранее.'
+      : null
 
   return (
     <section className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold">Посещаемость</h3>
+          <h3 className="text-sm font-semibold">Посещаемость и оплата</h3>
           {roster.length > 1 && (
             <p className="text-xs text-slate-500 dark:text-slate-400">
               отмечено {roster.length - unmarked} из {roster.length} · оплатили {paid}
@@ -51,10 +65,8 @@ export function AttendanceList({
         )}
       </div>
 
-      {!canMarkStatus && canTogglePaid && (
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Посещение отмечается в день занятия, а оплату можно отметить заранее.
-        </p>
+      {roster.length > 0 && hint && (
+        <p className="text-xs text-slate-500 dark:text-slate-400">{hint}</p>
       )}
 
       {roster.length === 0 ? (
@@ -66,49 +78,72 @@ export function AttendanceList({
         <ul className="divide-y divide-slate-100 rounded-xl ring-1 ring-slate-200 dark:divide-slate-800 dark:ring-slate-800">
           {roster.map((s) => {
             const row = rowOf(s.id)
+            const status = row?.status ?? null
+            // имя и фамилия в две строки — справа место под две кнопки
+            const surname = s.first_name ? s.last_name : ''
             return (
-              <li key={s.id} className="space-y-2 px-3 py-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex min-w-0 items-center gap-2.5">
-                    <StudentAvatar student={s} size="sm" muted={!s.is_active} />
-                    <span className="min-w-0 truncate font-medium">
-                      {s.full_name}
+              <li key={s.id} className="flex items-center gap-2.5 px-3 py-2.5">
+                <StudentAvatar student={s} size="sm" muted={!s.is_active} />
+                <span className="min-w-0 flex-1 leading-tight">
+                  <span className="block truncate font-medium">{s.first_name || s.full_name}</span>
+                  {(surname || !s.is_active) && (
+                    <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                      {surname}
                       {!s.is_active && <Badge>архив</Badge>}
                     </span>
-                  </span>
-                  <PaidToggle
-                    on={!!row?.is_paid}
-                    disabled={!canTogglePaid}
-                    onClick={() => onPaid(s.id, !row?.is_paid)}
-                  />
-                </div>
-                <div className="grid grid-cols-4 gap-1">
-                  {STATUS_OPTIONS.map((o) => {
-                    const on = row?.status === o.value
-                    return (
-                      <button
-                        key={o.value}
-                        type="button"
-                        disabled={!canMarkStatus}
-                        aria-pressed={on}
-                        onClick={() => onStatus(s.id, on ? null : o.value)}
-                        className={`rounded-lg px-1 py-2 text-xs font-semibold transition disabled:opacity-40 ${
-                          on
-                            ? o.on
-                            : 'text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800'
-                        }`}
-                      >
-                        {o.label}
-                      </button>
-                    )
-                  })}
-                </div>
+                  )}
+                </span>
+                <MarkButton
+                  status={status}
+                  disabled={!canMarkStatus}
+                  name={s.full_name}
+                  onClick={() => onStatus(s.id, nextStatus(status))}
+                />
+                <PaidToggle
+                  on={!!row?.is_paid}
+                  disabled={!canTogglePaid}
+                  onClick={() => onPaid(s.id, !row?.is_paid)}
+                />
               </li>
             )
           })}
         </ul>
       )}
     </section>
+  )
+}
+
+/** «Есть» / «Нет» / без отметки — одна кнопка на ребёнка. */
+function MarkButton({
+  status,
+  disabled,
+  name,
+  onClick,
+}: {
+  status: AttendanceStatus | null
+  disabled: boolean
+  name: string
+  onClick: () => void
+}) {
+  const mark = !status ? null : came(status) ? 'in' : 'out'
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={`${name}: ${mark === 'in' ? 'есть' : mark === 'out' ? 'нет' : 'без отметки'}`}
+      className={`inline-flex h-10 w-16 shrink-0 items-center justify-center gap-1 rounded-xl text-sm font-semibold transition disabled:opacity-40 ${
+        mark === 'in'
+          ? 'bg-emerald-600 text-white'
+          : mark === 'out'
+            ? 'bg-rose-600 text-white'
+            : 'text-slate-600 ring-1 ring-slate-300 hover:bg-slate-100 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800'
+      }`}
+    >
+      {mark === 'in' && <CheckIcon className="size-4" />}
+      {mark === 'out' && <CloseIcon className="size-4" />}
+      {mark === 'out' ? 'Нет' : 'Есть'}
+    </button>
   )
 }
 
@@ -127,14 +162,15 @@ export function PaidToggle({
       onClick={onClick}
       disabled={disabled}
       aria-pressed={on}
-      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 transition disabled:opacity-50 ${
+      aria-label={on ? 'оплачено' : 'не оплачено'}
+      className={`inline-flex h-10 w-[5.75rem] shrink-0 items-center justify-center gap-1 rounded-xl text-xs font-semibold ring-1 transition disabled:opacity-50 ${
         on
           ? 'bg-emerald-50 text-emerald-700 ring-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300 dark:ring-emerald-800'
-          : 'text-slate-500 ring-slate-200 hover:bg-slate-100 dark:text-slate-400 dark:ring-slate-700 dark:hover:bg-slate-800'
+          : 'text-slate-600 ring-slate-300 hover:bg-slate-100 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800'
       }`}
     >
       {on ? <CheckIcon className="size-3.5" /> : <span aria-hidden>₽</span>}
-      {on ? 'оплачено' : 'не оплачено'}
+      {on ? 'Оплачено' : 'Оплата'}
     </button>
   )
 }
