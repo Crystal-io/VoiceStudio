@@ -59,20 +59,31 @@ export function RoomGrid({
   const liveBookings = bookings.filter((b) => bookingState(b) !== 'released')
   const released = bookings.length - liveBookings.length
 
+  // колонки — только кабинеты, где в этот день есть занятия или брони;
+  // совсем свободные перечислены строкой под сеткой
   const used = new Set<string | null>([...live.map((s) => s.room_id), ...liveBookings.map((b) => b.room_id)])
   const columns: Column[] = dir.rooms
-    .filter((r) => r.is_active || used.has(r.id))
+    .filter((r) => used.has(r.id))
     .map((r) => ({ id: r.id, name: r.name, inactive: !r.is_active }))
   if (used.has(null)) columns.push({ id: null, name: 'Без кабинета', inactive: false })
+  const freeAllDay = dir.rooms.filter((r) => r.is_active && !used.has(r.id)).map((r) => r.name)
 
   if (columns.length === 0) {
     return (
       <Card>
-        <EmptyState
-          icon={<DoorIcon className="size-6" />}
-          title="Кабинетов пока нет"
-          hint="Директор добавляет их в разделе «Кабинеты» — здесь появится сетка занятости."
-        />
+        {freeAllDay.length === 0 ? (
+          <EmptyState
+            icon={<DoorIcon className="size-6" />}
+            title="Кабинетов пока нет"
+            hint="Директор добавляет их в разделе «Кабинеты» — здесь появится сетка занятости."
+          />
+        ) : (
+          <EmptyState
+            icon={<DoorIcon className="size-6" />}
+            title="В этот день занятий и броней нет"
+            hint={`Свободны весь день: ${freeAllDay.join(', ')}.`}
+          />
+        )}
       </Card>
     )
   }
@@ -119,6 +130,12 @@ export function RoomGrid({
 
   return (
     <div className="space-y-2">
+      {freeAllDay.length > 0 && (
+        <p className="px-1 text-sm text-slate-600 dark:text-slate-300">
+          <span className="font-medium text-emerald-700 dark:text-emerald-400">Свободны весь день:</span>{' '}
+          {freeAllDay.join(', ')}
+        </p>
+      )}
       {/* Узкая сетка прокручивается вместе со страницей; широкая — в своей
           рамке, чтобы и названия кабинетов, и часы оставались на виду. */}
       <div
