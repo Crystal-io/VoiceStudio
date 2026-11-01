@@ -44,13 +44,11 @@ export function RoomsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">Кабинеты</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Комнаты, в которых проходят занятия.
-          </p>
-        </div>
+      {/* таб «Кабинеты» в «Студии»: заголовок — у самой страницы */}
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          Комнаты, в которых проходят занятия.
+        </p>
         <Button onClick={() => setAdding(true)} className="shrink-0">
           <PlusIcon className="size-5" />
           Добавить

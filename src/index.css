@@ -14,7 +14,8 @@
   --color-brand-900: #312e81;
   --color-brand-950: #1e1b4b;
 
-  --font-sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  /* «Twemoji Country Flags» — только флаги, и только там, где их нет (Windows) */
+  --font-sans: 'Twemoji Country Flags', system-ui, 'Segoe UI', Roboto, sans-serif;
 }
 
 /* Системные контролы (выбор даты и т.п.) — в тон светлой/тёмной теме. */

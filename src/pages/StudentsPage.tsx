@@ -33,7 +33,11 @@ import {
 type Tab = 'students' | 'groups'
 type Whose = 'mine' | 'all'
 
-export function StudentsPage() {
+/**
+ * Ученики и группы. У педагога — свой раздел с табами; у директора — табы
+ * «Ученики» и «Группы» в «Студии» (embedded: без заголовка и своих табов).
+ */
+export function StudentsPage({ embedded = false }: { embedded?: boolean }) {
   const { profile } = useProfile()
   const { dir, error: loadError, reload } = useDirectory()
   const [params, setParams] = useSearchParams()
@@ -54,9 +58,9 @@ export function StudentsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold">Ученики</h2>
+          {!embedded && <h2 className="text-xl font-semibold">Ученики</h2>}
           <p className="text-sm text-slate-500 dark:text-slate-400">
             {tab === 'students'
               ? 'Карточки детей, которые занимаются в студии.'
@@ -72,14 +76,16 @@ export function StudentsPage() {
         </Button>
       </div>
 
-      <Segmented<Tab>
-        value={tab}
-        onChange={(t) => setParams(t === 'groups' ? { tab: 'groups' } : {}, { replace: true })}
-        options={[
-          { value: 'students', label: 'Ученики' },
-          { value: 'groups', label: 'Группы' },
-        ]}
-      />
+      {!embedded && (
+        <Segmented<Tab>
+          value={tab}
+          onChange={(t) => setParams(t === 'groups' ? { tab: 'groups' } : {}, { replace: true })}
+          options={[
+            { value: 'students', label: 'Ученики' },
+            { value: 'groups', label: 'Группы' },
+          ]}
+        />
+      )}
 
       {loadError && <ErrorNote text={loadError} />}
 

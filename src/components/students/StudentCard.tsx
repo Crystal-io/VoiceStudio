@@ -7,15 +7,16 @@ import { ageFrom, plural } from '@/lib/format'
 import { diff, groupIdsOf, syncMembers, toggle } from '@/lib/groups'
 import {
   canEditStudent,
-  phoneDigits,
   removePhoto,
   telUrl,
   uploadPhoto,
   usePhotoUrl,
   whatsappUrl,
 } from '@/lib/students'
+import { joinPhone, phoneDigits } from '@/lib/phone'
 import { Badge, Button, ErrorNote, Field, Modal, SelectField, TextArea } from '@/components/ui'
 import { StudentAvatar } from '@/components/students/StudentAvatar'
+import { initialPhone, PhoneField, phoneProblem } from '@/components/students/PhoneField'
 import {
   ArchiveIcon,
   CameraIcon,
@@ -200,6 +201,11 @@ export function ParentContact({
           </p>
         </div>
       </div>
+      {!digits && student.parent_phone && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          В номере нет кода страны — WhatsApp не откроется. Выберите страну в карточке.
+        </p>
+      )}
       {digits && (
         <div className="flex gap-2">
           <a
@@ -258,7 +264,9 @@ export function StudentForm({
     student ? (student.main_teacher_id ?? '') : isDirector ? '' : me.id,
   )
   const [parentName, setParentName] = useState(student?.parent_name ?? '')
-  const [parentPhone, setParentPhone] = useState(student?.parent_phone ?? '')
+  const [parentPhone, setParentPhone] = useState(() =>
+    initialPhone(student?.parent_phone ?? null, dir.students),
+  )
   const [joinedOn, setJoinedOn] = useState(student?.joined_on ?? todayISO())
   const [notes, setNotes] = useState(student?.notes ?? '')
   const [initialGroups] = useState(() => new Set(student ? groupIdsOf(student.id, dir) : []))
@@ -280,7 +288,7 @@ export function StudentForm({
   const teachers = dir.profiles.filter((p) => p.is_active || p.id === teacherId)
   const groupChoices = dir.groups.filter((g) => g.is_active || initialGroups.has(g.id))
   const age = birthDate ? ageFrom(birthDate) : null
-  const phoneBad = parentPhone.trim() !== '' && !phoneDigits(parentPhone)
+  const phoneBad = phoneProblem(parentPhone) !== null
   const invalid = !firstName.trim() || !lastName.trim() || phoneBad
 
   function onPhotoInput(e: ChangeEvent<HTMLInputElement>) {
@@ -315,7 +323,7 @@ export function StudentForm({
       birth_date: birthDate || null,
       main_teacher_id: teacherId || null,
       parent_name: parentName.trim() || null,
-      parent_phone: parentPhone.trim() || null,
+      parent_phone: joinPhone(parentPhone.iso, parentPhone.rest) || null,
       joined_on: joinedOn || todayISO(),
       notes: notes.trim() || null,
       photo_path: photoPath,
@@ -467,14 +475,11 @@ export function StudentForm({
         onChange={(e) => setParentName(e.target.value)}
         placeholder="Петрова Ольга Ивановна"
       />
-      <Field
+      <PhoneField
         label="Телефон родителя (WhatsApp)"
-        type="tel"
-        inputMode="tel"
         value={parentPhone}
-        onChange={(e) => setParentPhone(e.target.value)}
-        placeholder="+7 900 123-45-67"
-        hint={phoneBad ? 'Похоже, в номере не хватает цифр.' : undefined}
+        onChange={setParentPhone}
+        students={dir.students}
       />
       <Field
         label="В студии с"

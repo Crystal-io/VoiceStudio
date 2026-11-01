@@ -254,6 +254,18 @@ export function ImageIcon(props: IconProps) {
   )
 }
 
+/** Здание (раздел «Студия»). */
+export function BuildingIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M5 21V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v16" />
+      <path d="M16 9h1.5A1.5 1.5 0 0 1 19 10.5V21" />
+      <path d="M3 21h18" />
+      <path d="M9 7h3M9 11h3M9 15h3" />
+    </svg>
+  )
+}
+
 /** Экран (табло для холла). */
 export function MonitorIcon(props: IconProps) {
   return (

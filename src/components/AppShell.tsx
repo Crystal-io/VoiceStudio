@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { useProfile } from '@/lib/profile'
-import { HomeIcon, UsersIcon, DoorIcon, MusicIcon, CalendarIcon } from '@/components/icons'
+import { BuildingIcon, CalendarIcon, HomeIcon, MusicIcon } from '@/components/icons'
 import { Suspense, type ComponentType, type SVGProps } from 'react'
 import { Spinner } from '@/components/ui'
 
@@ -14,9 +14,8 @@ type NavItem = {
 const directorNav: NavItem[] = [
   { to: '/', label: 'Главная', icon: HomeIcon },
   { to: '/schedule', label: 'Расписание', icon: CalendarIcon },
-  { to: '/students', label: 'Ученики', icon: MusicIcon },
-  { to: '/teachers', label: 'Педагоги', icon: UsersIcon },
-  { to: '/rooms', label: 'Кабинеты', icon: DoorIcon },
+  // ученики, группы, педагоги и кабинеты — табы «Студии»
+  { to: '/studio', label: 'Студия', icon: BuildingIcon },
 ]
 
 const teacherNav: NavItem[] = [
@@ -30,7 +29,7 @@ export function AppShell() {
   const { profile } = useProfile()
   const { pathname } = useLocation()
   // отчёты открываются с главной — пока они открыты, подсвечиваем «Главную»
-  const inReports = pathname.startsWith('/reports') || pathname.startsWith('/studio')
+  const inReports = pathname.startsWith('/reports')
 
   const nav = profile?.role === 'director' ? directorNav : teacherNav
   const roleLabel = profile?.role === 'director' ? 'Директор' : 'Педагог'

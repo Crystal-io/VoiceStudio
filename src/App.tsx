@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ComponentType, type ReactNode } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useSearchParams } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { ProfileProvider, useProfile } from '@/lib/profile'
 import { isSupabaseConfigured } from '@/lib/supabase'
@@ -35,9 +35,8 @@ function lazyPage<M>(load: () => Promise<M>, pick: (m: M) => ComponentType) {
 const SchedulePage = lazyPage(() => import('@/pages/SchedulePage'), (m) => m.SchedulePage)
 const ReportsPage = lazyPage(() => import('@/pages/ReportsPage'), (m) => m.ReportsPage)
 const StudentsPage = lazyPage(() => import('@/pages/StudentsPage'), (m) => m.StudentsPage)
-const TeachersPage = lazyPage(() => import('@/pages/TeachersPage'), (m) => m.TeachersPage)
-const RoomsPage = lazyPage(() => import('@/pages/RoomsPage'), (m) => m.RoomsPage)
 const StudioPage = lazyPage(() => import('@/pages/StudioPage'), (m) => m.StudioPage)
+const HoursPage = lazyPage(() => import('@/pages/HoursPage'), (m) => m.HoursPage)
 const BoardPage = lazyPage(() => import('@/pages/BoardPage'), (m) => m.BoardPage)
 
 function Splash() {
@@ -66,7 +65,7 @@ function NoProfileNotice() {
       <h1 className="text-lg font-semibold">Доступ ещё не открыт</h1>
       <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
         Аккаунт <span className="font-medium">{user?.email}</span> пока не
-        привязан к студии. Попросите директора добавить эту почту в разделе
+        привязан к студии. Попросите директора добавить эту почту в «Студии» →
         «Педагоги».
       </p>
       <button
@@ -88,7 +87,7 @@ function DisabledNotice() {
       <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
         Директор студии отключил доступ для{' '}
         <span className="font-medium">{user?.email}</span>. Если это ошибка — попросите
-        директора вернуть его в разделе «Педагоги».
+        директора вернуть его в «Студии» → «Педагоги».
       </p>
       <button
         type="button"
@@ -106,6 +105,16 @@ function DirectorOnly({ children }: { children: ReactNode }) {
   const { profile } = useProfile()
   if (profile?.role !== 'director') return <Navigate to="/" replace />
   return <>{children}</>
+}
+
+/** «Ученики»: у педагога — свой раздел, у директора — табы «Студии». */
+function StudentsRoute() {
+  const { profile } = useProfile()
+  const [params] = useSearchParams()
+  if (profile?.role === 'director') {
+    return <Navigate to={params.get('tab') === 'groups' ? '/studio?tab=groups' : '/studio'} replace />
+  }
+  return <StudentsPage />
 }
 
 function AppRoutes() {
@@ -129,23 +138,10 @@ function AppRoutes() {
         <Route element={<AppShell />}>
           <Route index element={<HomePage />} />
           <Route path="schedule" element={<SchedulePage />} />
-          <Route
-            path="teachers"
-            element={
-              <DirectorOnly>
-                <TeachersPage />
-              </DirectorOnly>
-            }
-          />
-          <Route
-            path="rooms"
-            element={
-              <DirectorOnly>
-                <RoomsPage />
-              </DirectorOnly>
-            }
-          />
-          <Route path="students" element={<StudentsPage />} />
+          {/* старые адреса справочников — теперь табы «Студии» */}
+          <Route path="teachers" element={<Navigate to="/studio?tab=teachers" replace />} />
+          <Route path="rooms" element={<Navigate to="/studio?tab=rooms" replace />} />
+          <Route path="students" element={<StudentsRoute />} />
           <Route
             path="reports"
             element={
@@ -159,6 +155,14 @@ function AppRoutes() {
             element={
               <DirectorOnly>
                 <StudioPage />
+              </DirectorOnly>
+            }
+          />
+          <Route
+            path="studio/hours"
+            element={
+              <DirectorOnly>
+                <HoursPage />
               </DirectorOnly>
             }
           />

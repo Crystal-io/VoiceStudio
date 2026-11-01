@@ -83,26 +83,26 @@ function DirectorHome() {
       ) : (
         <div className="grid grid-cols-4 gap-2">
           <StatLink
-            to="/students"
+            to="/studio"
             icon={<MusicIcon className="size-4" />}
             value={counts.students}
             label="учеников"
           />
           <StatLink
-            to="/students?tab=groups"
+            to="/studio?tab=groups"
             icon={<UsersIcon className="size-4" />}
             value={counts.groups}
             label="групп"
           />
           <StatLink
-            to="/teachers"
+            to="/studio?tab=teachers"
             icon={<UsersIcon className="size-4" />}
             value={counts.teachers}
             label="педагогов"
             note={counts.invites > 0 ? `+${counts.invites} пригл.` : undefined}
           />
           <StatLink
-            to="/rooms"
+            to="/studio?tab=rooms"
             icon={<DoorIcon className="size-4" />}
             value={counts.rooms}
             label="кабинетов"
@@ -139,10 +139,10 @@ function RoomsLinks({ director = false }: { director?: boolean }) {
         />
         {director && (
           <ReportRow
-            to="/studio"
+            to="/studio/hours"
             icon={<CalendarIcon className="size-5" />}
-            title="Студия"
-            value="часы работы и праздники"
+            title="Часы и праздники"
+            value="часы работы студии, праздники в календаре"
           />
         )}
       </Card>

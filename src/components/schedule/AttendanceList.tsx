@@ -82,7 +82,7 @@ export function AttendanceList({
 
       {roster.length === 0 ? (
         <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
-          В составе пока никого — добавьте учеников в группу («Ученики» → «Группы») или
+          В составе пока никого — добавьте учеников в группу (таб «Группы») или
           кнопкой «Изменить состав».
         </p>
       ) : (

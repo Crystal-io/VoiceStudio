@@ -11,20 +11,8 @@ export function canEditStudent(me: Profile, s: Student): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Телефон родителя
+// Телефон родителя (цифры номера с кодом страны — phoneDigits в lib/phone)
 // ---------------------------------------------------------------------------
-
-/**
- * Цифры номера в международном виде: «8 900 123-45-67» → «79001234567».
- * Слишком короткий — null (по такому не позвонить и не написать).
- */
-export function phoneDigits(phone: string | null): string | null {
-  if (!phone) return null
-  let d = phone.replace(/\D/g, '')
-  if (d.length === 11 && d.startsWith('8')) d = `7${d.slice(1)}`
-  else if (d.length === 10 && d.startsWith('9')) d = `7${d}`
-  return d.length >= 10 ? d : null
-}
 
 export const whatsappUrl = (digits: string) => `https://wa.me/${digits}`
 export const telUrl = (digits: string) => `tel:+${digits}`

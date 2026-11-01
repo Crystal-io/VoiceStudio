@@ -1089,13 +1089,13 @@ begin
   if em <> '' and exists (select 1 from public.invitations where public.norm_email(email) = em) then
     return jsonb_build_object('error', jsonb_build_object(
       'http_code', 403,
-      'message', 'Приглашение на эту почту истекло. Попросите директора продлить его в «Педагогах».'
+      'message', 'Приглашение на эту почту истекло. Попросите директора продлить его в «Студии» → «Педагоги».'
     ));
   end if;
 
   return jsonb_build_object('error', jsonb_build_object(
     'http_code', 403,
-    'message', 'Этой почты нет в списке студии. Попросите директора добавить вас в «Педагоги» и войдите с той же почтой.'
+    'message', 'Этой почты нет в списке студии. Попросите директора добавить вас в «Студии» → «Педагоги» и войдите с той же почтой.'
   ));
 end;
 $$;
@@ -1581,7 +1581,7 @@ begin
   else
     if exists (select 1 from public.lesson_series where teacher_id = old.id)
        or exists (select 1 from public.sessions where teacher_id = old.id) then
-      raise exception 'У «%» есть занятия в расписании: удаление стёрло бы их вместе с посещаемостью и оплатами. Отключите доступ в «Педагогах».', old.full_name;
+      raise exception 'У «%» есть занятия в расписании: удаление стёрло бы их вместе с посещаемостью и оплатами. Отключите доступ в «Студии» → «Педагоги».', old.full_name;
     end if;
     if not was_director then
       return old;
@@ -1631,7 +1631,7 @@ begin
   where public.norm_email(u.email) = public.norm_email(new.email)
   limit 1;
   if member_studio = new.studio_id then
-    raise exception 'Этот человек уже в студии. Роль и доступ меняются в его строке в «Педагогах».';
+    raise exception 'Этот человек уже в студии. Роль и доступ меняются в его строке в «Студии» → «Педагоги».';
   elsif member_studio is not null then
     raise exception 'Эта почта уже привязана к другой студии';
   end if;
