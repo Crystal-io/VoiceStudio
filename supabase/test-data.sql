@@ -71,6 +71,8 @@ $$;
 -- Очистка (раскомментировать и выполнить перед запуском студии).
 -- Удаляет тестовые карточки и группы вместе с их занятиями и отметками.
 -- ----------------------------------------------------------------------------
+-- оплаты тестовых детей (M10: ученика с оплатами не удалить — записи кассы не теряются)
+-- delete from public.payments where student_id in (select id from public.students where notes = 'Тестовая карточка');
 -- delete from public.sessions where group_id in (select id from public.groups where name like '%(тест)');
 -- delete from public.lesson_series where group_id in (select id from public.groups where name like '%(тест)');
 -- delete from public.groups where name like '%(тест)';
@@ -79,5 +81,7 @@ $$;
 -- Тестовые педагоги («Михаил», «Michael - test»): с занятиями их не удалить
 -- (защита M9 — иначе каскад стёр бы посещаемость), поэтому сначала занятия,
 -- потом сами пользователи: Dashboard → Authentication → Users → Delete.
+-- (оплаты, которые они принимали, тоже держат профиль — сначала они)
+-- delete from public.payments where received_by in (select id from public.profiles where full_name in ('Михаил', 'Michael - test'));
 -- delete from public.sessions where teacher_id in (select id from public.profiles where full_name in ('Михаил', 'Michael - test'));
 -- delete from public.lesson_series where teacher_id in (select id from public.profiles where full_name in ('Михаил', 'Michael - test'));

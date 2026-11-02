@@ -1,14 +1,16 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
-import type { Attendance, AttendanceStatus, LessonSeries, Profile, Session } from '@/lib/types'
+import type { Attendance, AttendanceStatus, LessonSeries, Profile, Session, Student } from '@/lib/types'
 import { formatDayMonth, timeRange, todayISO, weekdayOf, WEEKDAYS_EVERY, WEEKDAYS_SHORT } from '@/lib/dates'
-import { attendanceColumns, nobodyCame, rosterOf } from '@/lib/attendance'
+import { loadAttendance, nobodyCame, rosterOf } from '@/lib/attendance'
+import { loadBalances } from '@/lib/money'
 import { lessonTitle, seriesColumns, teacherColor, toSeries } from '@/lib/schedule'
 import { lessonTariff, money, rateFor, tariffTitle } from '@/lib/tariffs'
 import { Button, ErrorNote, Modal, Spinner } from '@/components/ui'
 import { AttendanceList } from '@/components/schedule/AttendanceList'
 import { ParentContact } from '@/components/students/StudentCard'
+import { AcceptPaymentSheet } from '@/components/cash/AcceptPaymentSheet'
 import { CalendarIcon, ChevronDownIcon, ClockIcon, DoorIcon, RepeatIcon, WalletIcon } from '@/components/icons'
 
 type Confirm = 'delete' | 'stop' | null
@@ -62,21 +64,27 @@ export function SessionSheet({
     }
   }, [session.series_id])
 
+  // отметки с ценой и что оплачено, балансы детей (педагогу — своих учеников)
+  const [balances, setBalances] = useState<Map<string, number> | null>(null)
+  const [paying, setPaying] = useState<Student | null>(null)
+  const [moneyVersion, setMoneyVersion] = useState(0)
+
   useEffect(() => {
     let alive = true
-    void supabase
-      .from('attendance')
-      .select(attendanceColumns)
-      .eq('session_id', session.id)
-      .then(({ data, error }) => {
-        if (!alive) return
-        setRows((data as Attendance[]) ?? [])
-        if (error) setError(error.message)
-      })
+    void (async () => {
+      const att = await loadAttendance([session.id], { money: true })
+      const list = att.bySession.get(session.id) ?? []
+      const ids = rosterOf(session, dir, list).map((s) => s.id)
+      const bal = await loadBalances(ids)
+      if (!alive) return
+      setRows(list)
+      setBalances(bal.balances)
+      if (att.error || bal.error) setError(att.error ?? bal.error)
+    })()
     return () => {
       alive = false
     }
-  }, [session.id])
+  }, [session, dir, moneyVersion])
 
   const teacher = dir.profileById.get(session.teacher_id)
   const room = session.room_id ? dir.roomById.get(session.room_id)?.name : null
@@ -90,26 +98,32 @@ export function SessionSheet({
   // занятие с одним учеником — сразу под рукой контакт родителя
   const solo = !session.group_id && roster.length === 1 ? roster[0] : null
 
-  /** Сохранить отметку ученика. Пустая строка (без статуса и оплаты) удаляется. */
-  async function saveRows(studentIds: string[], patch: Partial<Pick<Attendance, 'status' | 'is_paid'>>) {
+  /**
+   * Сохранить отметки учеников. Без отметки строка удаляется. Цену при «Есть»
+   * ставит база — после записи перечитываем суммы и что оплачено.
+   */
+  async function saveRows(studentIds: string[], status: AttendanceStatus | null) {
     const prev = rows ?? []
-    const next = studentIds.map((student_id) => ({
+    const next: Attendance[] = studentIds.map((student_id) => ({
       session_id: session.id,
       student_id,
-      status: null,
-      is_paid: false,
-      ...prev.find((r) => r.student_id === student_id),
-      ...patch,
+      status,
+      amount: prev.find((r) => r.student_id === student_id)?.amount ?? null,
     }))
-    const keep = next.filter((r) => r.status || r.is_paid)
-    const drop = next.filter((r) => !r.status && !r.is_paid).map((r) => r.student_id)
+    const keep = status ? next : []
+    const drop = status ? [] : studentIds
     setRows([...prev.filter((r) => !studentIds.includes(r.student_id)), ...keep])
     setError(null)
 
     const results = await Promise.all([
       keep.length > 0
         ? supabase.from('attendance').upsert(
-            keep.map((r) => ({ ...r, studio_id: session.studio_id })),
+            keep.map((r) => ({
+              session_id: r.session_id,
+              student_id: r.student_id,
+              status: r.status,
+              studio_id: session.studio_id,
+            })),
             { onConflict: 'session_id,student_id' },
           )
         : null,
@@ -127,15 +141,15 @@ export function SessionSheet({
       setError(failed.message)
       return
     }
+    setMoneyVersion((v) => v + 1)
     onAttendanceChanged()
   }
 
-  const setStatus = (id: string, status: AttendanceStatus | null) => void saveRows([id], { status })
-  const setPaid = (id: string, is_paid: boolean) => void saveRows([id], { is_paid })
+  const setStatus = (id: string, status: AttendanceStatus | null) => void saveRows([id], status)
   const allPresent = () =>
     void saveRows(
       roster.filter((s) => !rows?.find((r) => r.student_id === s.id)?.status).map((s) => s.id),
-      { status: 'present' },
+      'present',
     )
 
   async function run(action: () => PromiseLike<{ error: { message: string } | null }>) {
@@ -166,7 +180,7 @@ export function SessionSheet({
       .select('session_id', { count: 'exact', head: true })
       .eq('session_id', session.id)
     if (count) {
-      setError('На занятии уже есть отметки посещения или оплаты — его можно только отменить.')
+      setError('На занятии уже есть отметки посещения — его можно только отменить.')
       setConfirm(null)
       return
     }
@@ -234,10 +248,12 @@ export function SessionSheet({
             <AttendanceList
               roster={roster}
               rows={rows}
+              balances={balances}
+              currency={dir.studio.currency}
               canMarkStatus={canEdit && session.date <= todayISO()}
-              canTogglePaid={canEdit}
+              canAccept={canEdit}
               onStatus={setStatus}
-              onPaid={setPaid}
+              onAccept={setPaying}
               onAllPresent={allPresent}
             />
           ) : (
@@ -259,6 +275,20 @@ export function SessionSheet({
         )}
 
         {error && <ErrorNote text={error} />}
+
+        {paying && (
+          <AcceptPaymentSheet
+            student={paying}
+            dir={dir}
+            me={me}
+            onClose={() => setPaying(null)}
+            onDone={() => {
+              setPaying(null)
+              setMoneyVersion((v) => v + 1)
+              onAttendanceChanged()
+            }}
+          />
+        )}
 
         {canEdit && confirm && (
           <div className="space-y-3 rounded-xl bg-slate-50 p-4 text-sm dark:bg-slate-800/60">

@@ -120,12 +120,44 @@ export type Session = {
 
 export type AttendanceStatus = 'present' | 'late' | 'absent' | 'excused'
 
-/** Ребёнок × занятие: посещение (может быть ещё не отмечено) и оплата. */
+/**
+ * Ребёнок × занятие: посещение (может быть ещё не отмечено) и цена, которую
+ * база начислила при «Есть» (без «Есть» — пусто).
+ */
 export type Attendance = {
   session_id: string
   student_id: string
   status: AttendanceStatus | null
-  is_paid: boolean
+  amount: number | null
+  /** сколько из цены уже покрыто деньгами ученика (см. charge_status); не известно — нет поля */
+  covered?: number
+}
+
+export type PaymentMethod = 'cash' | 'transfer'
+
+/** Оплата ученика: только оставленная сумма; не удаляется — отменяется с причиной. */
+export type Payment = {
+  id: string
+  student_id: string
+  amount: number
+  method: PaymentMethod
+  received_by: string
+  received_at: string
+  note: string | null
+  cancelled_at: string | null
+  cancelled_by: string | null
+  cancel_reason: string | null
+}
+
+/** Начисление за занятие и сколько из него покрыто оплатами (с самого старого). */
+export type ChargeStatus = {
+  session_id: string
+  student_id: string
+  date: string
+  start_time: string
+  teacher_id: string
+  amount: number
+  covered: number
 }
 
 /** Студия: часы работы и рабочие дни (0=Пн … 6=Вс) — от них считается загрузка. */
@@ -137,6 +169,8 @@ export type Studio = {
   work_days: number[]
   /** валюта касс — код ISO, «EUR» */
   currency: string
+  /** часовой пояс студии — для «до конца дня»; ставит приложение директора */
+  timezone: string | null
 }
 
 export type TariffKind = 'group' | 'private'

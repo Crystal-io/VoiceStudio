@@ -15,13 +15,11 @@ export function AttendanceReport({
   sessions,
   bySession,
   dir,
-  onChanged,
 }: {
   period: Period
   sessions: Session[]
   bySession: Map<string, Attendance[]>
   dir: Directory
-  onChanged: () => void
 }) {
   const report = attendanceReport(sessions, bySession, dir)
   const [openId, setOpenId] = useState<string | null>(null)
@@ -97,10 +95,6 @@ export function AttendanceReport({
           dir={dir}
           caption={period.label}
           onClose={() => setOpenId(null)}
-          onChanged={() => {
-            setOpenId(null)
-            onChanged()
-          }}
         />
       )}
     </div>
@@ -138,12 +132,6 @@ function StudentRow({ item, onClick }: { item: StudentAttendance; onClick: () =>
             </span>
           ) : (
             <span>без пропусков</span>
-          )}
-          {item.unpaid > 0 && (
-            <span className="font-medium text-amber-600 dark:text-amber-400">
-              {' '}
-              · не оплачено {item.unpaid}
-            </span>
           )}
         </p>
       </div>

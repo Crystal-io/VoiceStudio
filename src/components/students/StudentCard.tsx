@@ -14,9 +14,10 @@ import {
   whatsappUrl,
 } from '@/lib/students'
 import { joinPhone, phoneDigits } from '@/lib/phone'
-import { Badge, Button, ErrorNote, Field, Modal, SelectField, TextArea } from '@/components/ui'
+import { Badge, Button, ErrorNote, Field, Modal, Segmented, SelectField, TextArea } from '@/components/ui'
 import { StudentAvatar } from '@/components/students/StudentAvatar'
 import { initialPhone, PhoneField, phoneProblem } from '@/components/students/PhoneField'
+import { StudentAccount } from '@/components/cash/StudentAccount'
 import {
   ArchiveIcon,
   CameraIcon,
@@ -29,37 +30,62 @@ import {
   UserIcon,
 } from '@/components/icons'
 
-/** Карточка ученика: просмотр, а у кого есть права — правка. Новая — сразу форма. */
+type CardTab = 'card' | 'money'
+
+/**
+ * Карточка ученика: просмотр, а у кого есть права — правка. Новая — сразу
+ * форма. Вкладка «Оплаты» — лицевой счёт (M10).
+ */
 export function StudentCardModal({
   student,
   dir,
   me,
+  initialTab = 'card',
   onClose,
   onChanged,
+  onMoneyChanged,
 }: {
   student: Student | null
   dir: Directory
   me: Profile
+  initialTab?: CardTab
   onClose: () => void
   /** карточку сохранили или убрали в архив — перечитать списки */
   onChanged: () => void
+  /** приняли или отменили оплату — перечитать долги */
+  onMoneyChanged?: () => void
 }) {
   const [editing, setEditing] = useState(!student)
+  const [tab, setTab] = useState<CardTab>(initialTab)
   return (
     <Modal
-      title={!student ? 'Новый ученик' : editing ? 'Изменить карточку' : 'Карточка ученика'}
+      title={!student ? 'Новый ученик' : editing ? 'Изменить карточку' : student.full_name}
       onClose={onClose}
     >
       {editing || !student ? (
         <StudentForm student={student} dir={dir} me={me} onSaved={onChanged} />
       ) : (
-        <StudentView
-          student={student}
-          dir={dir}
-          me={me}
-          onEdit={() => setEditing(true)}
-          onChanged={onChanged}
-        />
+        <div className="space-y-4">
+          <Segmented<CardTab>
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: 'card', label: 'Карточка' },
+              { value: 'money', label: 'Оплаты' },
+            ]}
+          />
+          {tab === 'card' ? (
+            <StudentView
+              student={student}
+              dir={dir}
+              me={me}
+              onEdit={() => setEditing(true)}
+              onChanged={onChanged}
+            />
+          ) : (
+            <StudentAccount student={student} dir={dir} me={me} onChanged={onMoneyChanged} />
+          )}
+        </div>
       )}
     </Modal>
   )

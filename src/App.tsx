@@ -159,14 +159,7 @@ function AppRoutes() {
               </DirectorOnly>
             }
           />
-          <Route
-            path="cash"
-            element={
-              <DirectorOnly>
-                <CashPage />
-              </DirectorOnly>
-            }
-          />
+          <Route path="cash" element={<CashPage />} />
           <Route
             path="studio/hours"
             element={

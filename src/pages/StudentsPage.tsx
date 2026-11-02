@@ -1,10 +1,12 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useProfile } from '@/lib/profile'
 import { useDirectory, type Directory } from '@/lib/directory'
 import { ageFrom, plural } from '@/lib/format'
 import { diff, groupIdsOf, syncMembers, toggle } from '@/lib/groups'
+import { loadBalances } from '@/lib/money'
+import { money } from '@/lib/tariffs'
 import type { Group, Profile, Student } from '@/lib/types'
 import {
   Badge,
@@ -139,6 +141,17 @@ function StudentsList({
   const hasMine = dir.students.some((s) => s.main_teacher_id === me.id)
   const [whose, setWhose] = useState<Whose>(!isDirector && hasMine ? 'mine' : 'all')
   const [query, setQuery] = useState('')
+  // долг или аванс в строке ученика (педагогу база отдаёт только его учеников)
+  const [balances, setBalances] = useState<Map<string, number>>(new Map())
+  useEffect(() => {
+    let alive = true
+    void loadBalances().then((res) => {
+      if (alive) setBalances(res.balances)
+    })
+    return () => {
+      alive = false
+    }
+  }, [dir])
 
   const q = query.trim().toLowerCase()
   const matches = (s: Student) =>
@@ -180,16 +193,32 @@ function StudentsList({
     )
   }
 
-  const row = (s: Student) => (
-    <PersonRow
-      key={s.id}
-      title={s.full_name}
-      subtitle={subtitle(s)}
-      avatar={<StudentAvatar student={s} muted={!s.is_active} />}
-      muted={!s.is_active}
-      onClick={() => onOpen(s)}
-    />
-  )
+  const row = (s: Student) => {
+    const balance = balances.get(s.id) ?? 0
+    return (
+      <PersonRow
+        key={s.id}
+        title={s.full_name}
+        subtitle={subtitle(s)}
+        avatar={<StudentAvatar student={s} muted={!s.is_active} />}
+        aside={
+          balance !== 0 ? (
+            <span
+              className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${
+                balance < 0
+                  ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300'
+                  : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+              }`}
+            >
+              {balance < 0 ? `долг ${money(-balance, dir.studio.currency)}` : `аванс ${money(balance, dir.studio.currency)}`}
+            </span>
+          ) : undefined
+        }
+        muted={!s.is_active}
+        onClick={() => onOpen(s)}
+      />
+    )
+  }
 
   return (
     <div className="space-y-3">
@@ -306,12 +335,15 @@ function PersonRow({
   title,
   subtitle,
   avatar,
+  aside,
   muted,
   onClick,
 }: {
   title: string
   subtitle: string
   avatar: ReactNode
+  /** справа перед стрелкой — долг или аванс ученика */
+  aside?: ReactNode
   muted?: boolean
   onClick: () => void
 }) {
@@ -330,6 +362,7 @@ function PersonRow({
           </p>
           <p className="truncate text-sm text-slate-500 dark:text-slate-400">{subtitle}</p>
         </div>
+        {aside}
         <ChevronRightIcon className="size-5 shrink-0 text-slate-300 dark:text-slate-600" />
       </button>
     </li>

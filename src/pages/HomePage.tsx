@@ -2,9 +2,12 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useProfile } from '@/lib/profile'
+import { useDirectory } from '@/lib/directory'
 import { addDays, startOfWeek, todayISO } from '@/lib/dates'
 import { ensureSessions, loadSessions } from '@/lib/schedule'
-import { came, loadAttendance, loadDebts } from '@/lib/attendance'
+import { came, loadAttendance } from '@/lib/attendance'
+import { loadBalances } from '@/lib/money'
+import { money } from '@/lib/tariffs'
 import { formatDuration, percent, plural } from '@/lib/format'
 import { Card, Spinner } from '@/components/ui'
 import {
@@ -27,6 +30,7 @@ export function HomePage() {
 }
 
 function DirectorHome() {
+  const { dir } = useDirectory()
   const [counts, setCounts] = useState<{
     teachers: number
     invites: number
@@ -72,7 +76,7 @@ function DirectorHome() {
       <div>
         <h2 className="text-xl font-semibold">Обзор студии</h2>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Состав студии, нагрузка, посещаемость и оплата — подробности по нажатию.
+          Состав студии, нагрузка, посещаемость и долги — подробности по нажатию.
         </p>
       </div>
 
@@ -110,7 +114,7 @@ function DirectorHome() {
         </div>
       )}
 
-      <ReportsSummary />
+      <ReportsSummary currency={dir?.studio.currency ?? 'EUR'} />
 
       <RoomsLinks director />
 
@@ -186,11 +190,13 @@ type Summary = {
   minutes: number
   /** доля пришедших среди отметок недели; null — отметок нет */
   rate: number | null
-  debts: number
+  /** сколько учеников должны и сколько всего */
+  debtors: number
+  debt: number
 }
 
 /** Короткие итоги недели со ссылками на отчёты. */
-function ReportsSummary() {
+function ReportsSummary({ currency }: { currency: string }) {
   const [sum, setSum] = useState<Summary | null>(null)
 
   useEffect(() => {
@@ -199,7 +205,8 @@ function ReportsSummary() {
       const from = startOfWeek(todayISO())
       const to = addDays(from, 6)
       await ensureSessions(to)
-      const [week, debts] = await Promise.all([loadSessions(from, to), loadDebts()])
+      const [week, bal] = await Promise.all([loadSessions(from, to), loadBalances()])
+      const owing = [...bal.balances.values()].filter((b) => b < 0)
       const live = week.sessions.filter((s) => s.status !== 'cancelled')
       // несостоявшиеся (никто не пришёл) — не нагрузка, но пропуски в посещаемости
       const held = live.filter((s) => s.status !== 'missed')
@@ -210,7 +217,8 @@ function ReportsSummary() {
         lessons: held.length,
         minutes: held.reduce((n, s) => n + s.duration_min, 0),
         rate: percent(statuses.filter((r) => came(r.status)).length, statuses.length),
-        debts: debts.debts.length,
+        debtors: owing.length,
+        debt: -owing.reduce((n, b) => n + b, 0),
       })
     })()
     return () => {
@@ -250,16 +258,16 @@ function ReportsSummary() {
           value={sum && (sum.rate === null ? 'отметок пока нет' : `пришли ${sum.rate}%`)}
         />
         <ReportRow
-          to="/reports?tab=payments"
+          to="/cash?tab=debts"
           icon={<WalletIcon className="size-5" />}
-          title="Оплата"
+          title="Долги учеников"
           value={
             sum &&
-            (sum.debts > 0
-              ? `не оплачено ${plural(sum.debts, ['занятие', 'занятия', 'занятий'])}`
+            (sum.debtors > 0
+              ? `${money(sum.debt, currency)} · ${plural(sum.debtors, ['ученик', 'ученика', 'учеников'])}`
               : 'долгов нет')
           }
-          warn={!!sum && sum.debts > 0}
+          warn={!!sum && sum.debtors > 0}
         />
       </Card>
     </section>

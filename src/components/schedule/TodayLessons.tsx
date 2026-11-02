@@ -33,7 +33,7 @@ export function TodayLessons({ teacherId }: { teacherId?: string }) {
     void (async () => {
       await ensureSessions(today)
       const res = await loadSessions(addDays(today, -UNMARKED_DAYS), today, teacherId)
-      const att = await loadAttendance(res.sessions.map((s) => s.id))
+      const att = await loadAttendance(res.sessions.map((s) => s.id), { money: true })
       if (!alive) return
       setSessions(res.sessions)
       setAttendance(att.bySession)

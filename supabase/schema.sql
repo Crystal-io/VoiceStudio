@@ -226,16 +226,14 @@ create table if not exists public.session_students (
 create index if not exists session_students_student_idx on public.session_students(student_id);
 
 -- Посещаемость: статус ученика на конкретном занятии.
--- Оплата хранится здесь же (каждый ребёнок платит за своё занятие):
---   is_paid — факт оплаты (показываем в интерфейсе);
---   amount  — сумма (храним, но в MVP скрыта в интерфейсе — финансы прячем).
+-- amount — цена, начисленная ребёнку за это занятие (ставит база при «Есть»,
+-- см. M10); оплаты — отдельно, в payments.
 create table if not exists public.attendance (
   session_id  uuid not null references public.sessions(id) on delete cascade,
   student_id  uuid not null references public.students(id) on delete cascade,
   studio_id   uuid not null references public.studios(id) on delete cascade,
   status      text                        -- пусто = ещё не отмечен (см. M4)
                 check (status in ('present','absent','late','excused')),
-  is_paid     boolean not null default false,
   amount      numeric(10,2),
   marked_by   uuid references public.profiles(id) on delete set null,
   marked_at   timestamptz not null default now(),
@@ -243,8 +241,7 @@ create table if not exists public.attendance (
 );
 create index if not exists attendance_student_idx on public.attendance(student_id);
 
--- На случай, если таблица attendance уже была создана ранее без полей оплаты:
-alter table public.attendance add column if not exists is_paid boolean not null default false;
+-- На случай, если таблица attendance уже была создана ранее без цены:
 alter table public.attendance add column if not exists amount  numeric(10,2);
 
 -- ---------------------------------------------------------------------------
@@ -2274,3 +2271,192 @@ create trigger sessions_refs
   before insert or update of studio_id, teacher_id, room_id, group_id, tariff_id
   on public.sessions
   for each row execute function public.check_schedule_refs();
+
+-- ============================================================================
+-- M10: касса, часть 2 — деньги учеников
+--  * оплата (payments): ученик, сумма, наличные или перевод, кто принял и
+--    когда. Записывается только оставленная сумма: сдача мимо кассы;
+--  * записи не удаляются — отмена с причиной (cancel_payment): педагог —
+--    свою и до конца дня (по часовому поясу студии), директор — любую;
+--  * баланс ученика = оплаты − начисления (student_balances); деньги гасят
+--    занятия с самого старого (charge_status), остаток — аванс;
+--  * принять оплату может директор и педагог — у детей своих занятий
+--    (teaches_student); он же видит их оплаты, балансы и что оплачено;
+--  * флаг attendance.is_paid больше не нужен — «оплачено» считается по деньгам.
+-- ============================================================================
+
+-- часовой пояс студии — для «до конца дня»; ставит приложение директора
+alter table public.studios add column if not exists timezone text;
+
+alter table public.attendance drop column if exists is_paid;
+
+create table if not exists public.payments (
+  id             uuid primary key default gen_random_uuid(),
+  studio_id      uuid not null references public.studios(id) on delete cascade,
+  student_id     uuid not null references public.students(id) on delete restrict,
+  amount         numeric(10,2) not null check (amount > 0),
+  method         text not null check (method in ('cash', 'transfer')),
+  received_by    uuid not null references public.profiles(id) on delete restrict,
+  received_at    timestamptz not null default now(),
+  note           text,
+  cancelled_at   timestamptz,
+  cancelled_by   uuid references public.profiles(id) on delete set null,
+  cancel_reason  text,
+  created_at     timestamptz not null default now()
+);
+create index if not exists payments_student_idx on public.payments(student_id);
+create index if not exists payments_studio_received_idx on public.payments(studio_id, received_at);
+
+alter table public.payments enable row level security;
+
+-- Ведёт ли текущий педагог этого ученика: основной педагог или ученик был
+-- (или записан) на его занятиях.
+create or replace function public.teaches_student(p_student uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (select 1 from public.students
+                 where id = p_student and studio_id = public.current_studio_id()
+                   and main_teacher_id = auth.uid())
+      or exists (select 1 from public.sessions s
+                 join public.session_students x on x.session_id = s.id
+                 where s.teacher_id = auth.uid() and x.student_id = p_student)
+      or exists (select 1 from public.sessions s
+                 join public.group_members m on m.group_id = s.group_id
+                 where s.teacher_id = auth.uid() and m.student_id = p_student)
+      or exists (select 1 from public.attendance a
+                 join public.sessions s on s.id = a.session_id
+                 where s.teacher_id = auth.uid() and a.student_id = p_student)
+      or exists (select 1 from public.lesson_series ls
+                 join public.series_students x on x.series_id = ls.id
+                 where ls.teacher_id = auth.uid() and x.student_id = p_student);
+$$;
+revoke all on function public.teaches_student(uuid) from public, anon;
+grant execute on function public.teaches_student(uuid) to authenticated;
+
+-- Оплаты: директор видит все, педагог — своих учеников и принятые им самим.
+-- Принимают директор и педагог (у своих учеников). Менять и удалять нельзя —
+-- только отмена через cancel_payment.
+drop policy if exists payments_select on public.payments;
+create policy payments_select on public.payments
+  for select to authenticated
+  using (studio_id = public.current_studio_id()
+         and (public.is_director() or received_by = auth.uid()
+              or public.teaches_student(student_id)));
+drop policy if exists payments_insert on public.payments;
+create policy payments_insert on public.payments
+  for insert to authenticated
+  with check (studio_id = public.current_studio_id()
+              and (public.is_director() or public.teaches_student(student_id)));
+
+-- Новая оплата: студия — из ученика, принял — кто записывает, сейчас; без отмены.
+create or replace function public.payments_before_insert()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.studio_id := (select studio_id from public.students where id = new.student_id);
+  if new.studio_id is null then
+    raise exception 'Ученик не найден';
+  end if;
+  new.received_by := auth.uid();
+  new.received_at := now();
+  new.created_at := now();
+  new.note := nullif(btrim(coalesce(new.note, '')), '');
+  new.cancelled_at := null;
+  new.cancelled_by := null;
+  new.cancel_reason := null;
+  return new;
+end;
+$$;
+
+drop trigger if exists payments_before_insert on public.payments;
+create trigger payments_before_insert
+  before insert on public.payments
+  for each row execute function public.payments_before_insert();
+
+-- Отменить оплату с причиной. Педагог — только свою и только в тот же день.
+create or replace function public.cancel_payment(p_payment uuid, p_reason text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  p public.payments%rowtype;
+  tz text;
+begin
+  select * into p from public.payments
+  where id = p_payment and studio_id = public.current_studio_id();
+  if not found then
+    raise exception 'Оплата не найдена';
+  end if;
+  if p.cancelled_at is not null then
+    raise exception 'Оплата уже отменена';
+  end if;
+  if btrim(coalesce(p_reason, '')) = '' then
+    raise exception 'Напишите причину отмены';
+  end if;
+  if not public.is_director() then
+    select coalesce(timezone, 'UTC') into tz from public.studios where id = p.studio_id;
+    if p.received_by is distinct from auth.uid() then
+      raise exception 'Отменить чужую оплату может только директор';
+    end if;
+    if (p.received_at at time zone tz)::date <> (now() at time zone tz)::date then
+      raise exception 'Свою оплату можно отменить до конца дня — теперь это делает директор';
+    end if;
+  end if;
+  update public.payments
+  set cancelled_at = now(), cancelled_by = auth.uid(), cancel_reason = btrim(p_reason)
+  where id = p.id;
+end;
+$$;
+revoke all on function public.cancel_payment(uuid, text) from public, anon;
+grant execute on function public.cancel_payment(uuid, text) to authenticated;
+
+-- Баланс ученика: оплатил − начислено (больше нуля — аванс, меньше — долг).
+-- Отменённые занятия и оплаты не в счёт. Педагогу — только его ученики.
+create or replace view public.student_balances with (security_invoker = true) as
+select s.id as student_id,
+       s.studio_id,
+       coalesce(p.paid, 0) as paid,
+       coalesce(c.charged, 0) as charged,
+       coalesce(p.paid, 0) - coalesce(c.charged, 0) as balance
+from public.students s
+left join (select student_id, sum(amount) as paid from public.payments
+           where cancelled_at is null group by student_id) p on p.student_id = s.id
+left join (select a.student_id, sum(a.amount) as charged
+           from public.attendance a join public.sessions se on se.id = a.session_id
+           where a.amount is not null and se.status <> 'cancelled'
+           group by a.student_id) c on c.student_id = s.id
+where s.studio_id = public.current_studio_id()
+  and (public.is_director() or public.teaches_student(s.id));
+
+-- Что оплачено: деньги ученика гасят его занятия по очереди, с самого
+-- старого. covered — сколько из цены занятия уже покрыто.
+create or replace view public.charge_status with (security_invoker = true) as
+with ch as (
+  select a.session_id, a.student_id, a.studio_id, a.amount, se.date, se.start_time, se.teacher_id,
+         sum(a.amount) over (partition by a.student_id
+                             order by se.date, se.start_time, a.session_id) as upto
+  from public.attendance a
+  join public.sessions se on se.id = a.session_id
+  where a.amount is not null and se.status <> 'cancelled'
+), paid as (
+  select student_id, sum(amount) as total from public.payments
+  where cancelled_at is null group by student_id
+)
+select ch.session_id, ch.student_id, ch.studio_id, ch.date, ch.start_time, ch.teacher_id, ch.amount,
+       greatest(0, least(ch.amount, coalesce(paid.total, 0) - (ch.upto - ch.amount))) as covered
+from ch left join paid on paid.student_id = ch.student_id
+where ch.studio_id = public.current_studio_id()
+  and (public.is_director() or public.teaches_student(ch.student_id));
+
+grant select on public.student_balances to authenticated;
+grant select on public.charge_status to authenticated;
+revoke all on public.student_balances from anon;
+revoke all on public.charge_status from anon;

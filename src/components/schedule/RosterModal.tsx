@@ -51,7 +51,7 @@ export function RosterModal({
   const stays = new Set([...members, ...extras])
   // у кого отметка пропадёт (только для «этого занятия» — серия отметки не трогает)
   const losing = rows
-    .filter((r) => (r.status || r.is_paid) && !stays.has(r.student_id))
+    .filter((r) => r.status && !stays.has(r.student_id))
     .map((r) => dir.studentById.get(r.student_id))
     .filter((s): s is Student => !!s)
   const empty = !groupId && extras.length === 0

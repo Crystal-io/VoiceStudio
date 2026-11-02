@@ -162,7 +162,6 @@ export type StudentAttendance = {
   /** пришёл (есть + опоздание) */
   came: number
   /** пришёл, но оплата не отмечена */
-  unpaid: number
   marks: LessonMark[]
 }
 
@@ -190,10 +189,10 @@ export function attendanceReport(
     if (state === 'unmarked') unmarkedLessons += 1
     for (const row of bySession.get(s.id) ?? []) {
       const student = dir.studentById.get(row.student_id)
-      if (!student || (!row.status && !row.is_paid)) continue
+      if (!student || !row.status) continue
       let item = byStudent.get(student.id)
       if (!item) {
-        item = { student, counts: emptyCounts(), marked: 0, came: 0, unpaid: 0, marks: [] }
+        item = { student, counts: emptyCounts(), marked: 0, came: 0, marks: [] }
         byStudent.set(student.id, item)
       }
       item.marks.push({ session: s, row })
@@ -201,10 +200,7 @@ export function attendanceReport(
       counts[row.status] += 1
       item.counts[row.status] += 1
       item.marked += 1
-      if (came(row.status)) {
-        item.came += 1
-        if (!row.is_paid) item.unpaid += 1
-      }
+      if (came(row.status)) item.came += 1
     }
   }
 

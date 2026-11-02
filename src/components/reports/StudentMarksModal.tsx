@@ -1,19 +1,17 @@
-import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
 import type { Student } from '@/lib/types'
-import { came, STATUS_OPTIONS, type LessonMark } from '@/lib/attendance'
+import { STATUS_OPTIONS, type LessonMark } from '@/lib/attendance'
 import { formatDayWeekday, hhmm } from '@/lib/dates'
 import { plural } from '@/lib/format'
 import { byDateTime } from '@/lib/reports'
 import { isGroupLesson, lessonTitle } from '@/lib/schedule'
-import { Button, ErrorNote, Modal } from '@/components/ui'
-import { PaidToggle } from '@/components/schedule/AttendanceList'
+import { money } from '@/lib/tariffs'
+import { Modal } from '@/components/ui'
 import { ParentContact } from '@/components/students/StudentCard'
 
 /**
- * Занятия ученика с отметками: статус посещения и оплата. Директор может
- * отметить оплату по одному занятию или сразу по всем посещённым.
+ * Занятия ученика за период с отметками и ценой, которую начислила отметка
+ * «Есть». Оплаты — в карточке ученика («Оплаты») и в «Кассе».
  */
 export function StudentMarksModal({
   student,
@@ -21,89 +19,30 @@ export function StudentMarksModal({
   dir,
   caption,
   onClose,
-  onChanged,
 }: {
   student: Student
   marks: LessonMark[]
   dir: Directory
-  /** что за список: «Сентябрь 2026», «Не оплачено» */
+  /** что за список: «Сентябрь 2026» */
   caption: string
   onClose: () => void
-  /** оплата менялась — перечитать отчёт */
-  onChanged: () => void
 }) {
-  // оплата по id занятия — меняется на месте, список не перестраиваем,
-  // чтобы случайное касание можно было тут же вернуть
-  const [paid, setPaid] = useState(() => new Map(marks.map((m) => [m.session.id, m.row.is_paid])))
-  const [dirty, setDirty] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
   const sorted = [...marks].sort(byDateTime)
-  const owed = sorted.filter((m) => came(m.row.status) && !paid.get(m.session.id))
-
-  async function save(sessionIds: string[], value: boolean) {
-    const prev = new Map(paid)
-    setPaid((p) => {
-      const next = new Map(p)
-      for (const id of sessionIds) next.set(id, value)
-      return next
-    })
-    setError(null)
-    setBusy(true)
-    const { error } = await supabase
-      .from('attendance')
-      .update({ is_paid: value })
-      .eq('student_id', student.id)
-      .in('session_id', sessionIds)
-    setBusy(false)
-    if (error) {
-      setPaid(prev)
-      setError(error.message)
-      return
-    }
-    setDirty(true)
-  }
+  const charged = sorted.reduce((n, m) => n + Number(m.row.amount ?? 0), 0)
+  const currency = dir.studio.currency
 
   return (
-    <Modal title={student.full_name} onClose={() => (dirty ? onChanged() : onClose())}>
+    <Modal title={student.full_name} onClose={onClose}>
       <div className="space-y-4">
-        <div className="space-y-1 text-sm text-slate-500 dark:text-slate-400">
-          <p>
-            {caption} · {plural(sorted.length, ['занятие', 'занятия', 'занятий'])}
-            {owed.length > 0 ? (
-              <span className="font-medium text-amber-600 dark:text-amber-400">
-                {' '}
-                · не оплачено {owed.length}
-              </span>
-            ) : (
-              sorted.some((m) => came(m.row.status)) && (
-                <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                  {' '}
-                  · всё оплачено
-                </span>
-              )
-            )}
-          </p>
-        </div>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          {caption} · {plural(sorted.length, ['занятие', 'занятия', 'занятий'])}
+          {charged > 0 && ` · начислено ${money(charged, currency)}`}
+        </p>
         {(student.parent_name || student.parent_phone) && <ParentContact student={student} />}
-
-        {owed.length > 1 && (
-          <Button
-            className="w-full"
-            disabled={busy}
-            onClick={() => void save(owed.map((m) => m.session.id), true)}
-          >
-            Отметить оплату за {plural(owed.length, ['занятие', 'занятия', 'занятий'])}
-          </Button>
-        )}
-
-        {error && <ErrorNote text={error} />}
 
         <ul className="divide-y divide-slate-100 rounded-xl ring-1 ring-slate-200 dark:divide-slate-800 dark:ring-slate-800">
           {sorted.map(({ session, row }) => {
             const status = STATUS_OPTIONS.find((o) => o.value === row.status)
-            const isPaid = !!paid.get(session.id)
             const what = isGroupLesson(session) ? lessonTitle(session, dir) : 'Индивидуальное'
             const teacher = dir.profileById.get(session.teacher_id)?.full_name
             return (
@@ -124,11 +63,9 @@ export function StudentMarksModal({
                     {[what, teacher].filter(Boolean).join(' · ')}
                   </p>
                 </div>
-                <PaidToggle
-                  on={isPaid}
-                  disabled={busy}
-                  onClick={() => void save([session.id], !isPaid)}
-                />
+                <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-600 dark:text-slate-300">
+                  {row.amount !== null ? money(Number(row.amount), currency) : '—'}
+                </span>
               </li>
             )
           })}

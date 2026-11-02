@@ -77,7 +77,7 @@ export function SchedulePage() {
         loadSessions(weekStart, weekEnd, loadTeacher),
         loadBookings(weekStart, weekEnd),
       ])
-      const att = await loadAttendance(res.sessions.map((s) => s.id))
+      const att = await loadAttendance(res.sessions.map((s) => s.id), { money: true })
       if (!alive) return
       setSessions(res.sessions)
       setBookings(book.bookings)

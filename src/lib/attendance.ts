@@ -2,9 +2,10 @@ import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
 import type { Attendance, AttendanceStatus, Session, Student } from '@/lib/types'
 import { toMinutes, todayISO } from '@/lib/dates'
-import { chunks, loadSessionsByIds } from '@/lib/schedule'
+import { chunks } from '@/lib/schedule'
+import { loadCoverage } from '@/lib/money'
 
-export const attendanceColumns = 'session_id, student_id, status, is_paid'
+export const attendanceColumns = 'session_id, student_id, status, amount'
 
 /** Кнопки статуса — в порядке «как чаще отмечают». Подписи без рода. */
 export const STATUS_OPTIONS: { value: AttendanceStatus; label: string; on: string }[] = [
@@ -42,50 +43,39 @@ export function came(status: AttendanceStatus | null): boolean {
   return status === 'present' || status === 'late'
 }
 
-/** Отметки для набора занятий: id занятия → строки посещаемости. */
+/**
+ * Отметки для набора занятий: id занятия → строки посещаемости. С money —
+ * ещё и сколько из цены уже оплачено (covered; педагогу — только у его учеников).
+ */
 export async function loadAttendance(
   sessionIds: string[],
+  { money = false }: { money?: boolean } = {},
 ): Promise<{ bySession: Map<string, Attendance[]>; error: string | null }> {
   const bySession = new Map<string, Attendance[]>()
   // id занятий уходят в адрес запроса — за месяц их сотни, поэтому порциями
-  const results = await Promise.all(
-    chunks(sessionIds, 100).map((ids) =>
-      supabase.from('attendance').select(attendanceColumns).in('session_id', ids),
+  const [results, coverage] = await Promise.all([
+    Promise.all(
+      chunks(sessionIds, 100).map((ids) =>
+        supabase.from('attendance').select(attendanceColumns).in('session_id', ids),
+      ),
     ),
-  )
+    money ? loadCoverage(sessionIds) : null,
+  ])
   for (const { data } of results) {
     for (const row of (data as Attendance[]) ?? []) {
+      const c = coverage?.bySession.get(row.session_id)?.find((x) => x.student_id === row.student_id)
+      if (c) row.covered = Number(c.covered)
       const list = bySession.get(row.session_id) ?? []
       list.push(row)
       bySession.set(row.session_id, list)
     }
   }
   const error = results.find((r) => r.error)?.error
-  return { bySession, error: error ? error.message : null }
+  return { bySession, error: error ? error.message : (coverage?.error ?? null) }
 }
 
 /** Занятие ученика вместе с его отметкой. */
 export type LessonMark = { session: Session; row: Attendance }
-
-/**
- * Все неоплаченные посещения студии за всё время: ребёнок был на занятии
- * («есть» или «опоздание»), а оплата не отмечена. Пропуски не в счёт.
- */
-export async function loadDebts(): Promise<{ debts: LessonMark[]; error: string | null }> {
-  const { data, error } = await supabase
-    .from('attendance')
-    .select(attendanceColumns)
-    .eq('is_paid', false)
-    .in('status', ['present', 'late'])
-  if (error) return { debts: [], error: error.message }
-  const rows = (data as Attendance[]) ?? []
-  const res = await loadSessionsByIds([...new Set(rows.map((r) => r.session_id))])
-  const byId = new Map(res.sessions.map((s) => [s.id, s]))
-  const debts = rows
-    .map((row) => ({ session: byId.get(row.session_id)!, row }))
-    .filter((d) => d.session && d.session.status !== 'cancelled')
-  return { debts, error: res.error }
-}
 
 /** Нынешние (не в архиве) ученики группы. */
 export function groupMemberIds(groupId: string | null, dir: Directory): string[] {
@@ -127,7 +117,13 @@ export function isUnmarked(session: Session): boolean {
   return session.status === 'scheduled' && isOver(session)
 }
 
-/** Короткая сводка для карточки: «Есть · оплачено», «Были 4 из 5 · оплатили 3». */
+/** Начисление оплачено целиком (по деньгам ученика, с самого старого занятия). */
+export const isPaid = (r: Attendance) => r.amount !== null && r.covered !== undefined && r.covered >= r.amount
+
+/**
+ * Короткая сводка для карточки: «Есть · оплачено», «Были 4 из 5 · оплачено 3
+ * из 4». Оплата — только если известно покрытие (педагогу — у своих учеников).
+ */
 export function attendanceSummary(
   session: Session,
   dir: Directory,
@@ -135,29 +131,27 @@ export function attendanceSummary(
 ): { text: string; tone: 'ok' | 'warn' | 'muted' } | null {
   if (session.status === 'cancelled') return null
   const marked = rows.filter((r) => r.status)
-  const paid = rows.filter((r) => r.is_paid).length
+  const charged = rows.filter((r) => r.amount !== null)
+  const known = charged.length > 0 && charged.every((r) => r.covered !== undefined)
+  const paid = charged.filter(isPaid).length
   const total = rosterOf(session, dir, rows).length
 
   if (!session.group_id && total <= 1) {
     const row = rows[0]
-    if (!row) return null
-    const parts: string[] = []
-    if (row.status) parts.push(STATUS_TEXT[row.status])
+    if (!row?.status) return null
+    const parts: string[] = [STATUS_TEXT[row.status]]
     // «не оплачено» — только если был: за пропуск не платят
-    if (row.is_paid) parts.push('оплачено')
-    else if (came(row.status)) parts.push('не оплачено')
+    if (known) parts.push(paid ? 'оплачено' : row.covered ? 'оплачено частично' : 'не оплачено')
     const text = parts.join(' · ')
     return {
       text: text.charAt(0).toUpperCase() + text.slice(1),
-      tone: row.is_paid ? 'ok' : came(row.status) ? 'warn' : 'muted',
+      tone: known ? (paid ? 'ok' : 'warn') : 'muted',
     }
   }
 
-  if (marked.length === 0 && paid === 0) return null
+  if (marked.length === 0) return null
   const cameCount = marked.filter((r) => came(r.status)).length
-  const parts: string[] = []
-  if (marked.length > 0) parts.push(`Были ${cameCount} из ${total}`)
-  parts.push(`оплатили ${paid}${marked.length === 0 ? ` из ${total}` : ''}`)
-  const text = parts.join(' · ')
-  return { text: text.charAt(0).toUpperCase() + text.slice(1), tone: paid >= total ? 'ok' : 'muted' }
+  const parts = [`Были ${cameCount} из ${total}`]
+  if (known) parts.push(`оплачено ${paid} из ${charged.length}`)
+  return { text: parts.join(' · '), tone: known && paid >= charged.length ? 'ok' : known ? 'warn' : 'muted' }
 }

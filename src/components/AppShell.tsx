@@ -23,6 +23,8 @@ const teacherNav: NavItem[] = [
   { to: '/', label: 'Главная', icon: HomeIcon },
   { to: '/schedule', label: 'Расписание', icon: CalendarIcon },
   { to: '/students', label: 'Ученики', icon: MusicIcon },
+  // своя касса: принятые деньги и оплата своих занятий
+  { to: '/cash', label: 'Касса', icon: WalletIcon },
 ]
 
 export function AppShell() {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Navigate, useSearchParams } from 'react-router-dom'
 import { useDirectory } from '@/lib/directory'
 import type { Attendance, Session } from '@/lib/types'
 import { isISODate, todayISO } from '@/lib/dates'
@@ -10,17 +10,15 @@ import { ErrorNote, Segmented, Spinner } from '@/components/ui'
 import { PeriodPicker } from '@/components/reports/parts'
 import { LoadReport } from '@/components/reports/LoadReport'
 import { AttendanceReport } from '@/components/reports/AttendanceReport'
-import { PaymentsReport } from '@/components/reports/PaymentsReport'
 
-type Tab = 'load' | 'attendance' | 'payments'
+type Tab = 'load' | 'attendance'
 
 const TABS: { value: Tab; label: string }[] = [
   { value: 'load', label: 'Нагрузка' },
   { value: 'attendance', label: 'Посещаемость' },
-  { value: 'payments', label: 'Оплата' },
 ]
 
-/** Отчёты директора: нагрузка, посещаемость, неоплаченные занятия. */
+/** Отчёты директора: нагрузка и посещаемость (долги и авансы — в «Кассе»). */
 export function ReportsPage() {
   const [params, setParams] = useSearchParams()
   const { dir, error: dirError } = useDirectory()
@@ -37,13 +35,9 @@ export function ReportsPage() {
     bySession: Map<string, Attendance[]>
   } | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [version, setVersion] = useState(0)
-  const key = `${period.from}:${period.to}:${version}`
-  // занятия за период нужны нагрузке и посещаемости; оплате — нет
-  const needSessions = tab !== 'payments'
+  const key = `${period.from}:${period.to}`
 
   useEffect(() => {
-    if (!needSessions) return
     let alive = true
     void (async () => {
       // для будущих недель занятия серий досоздаются заранее
@@ -57,7 +51,7 @@ export function ReportsPage() {
     return () => {
       alive = false
     }
-  }, [needSessions, key, period.from, period.to])
+  }, [key, period.from, period.to])
 
   function update(next: { tab?: Tab; period?: Period }) {
     const p = new URLSearchParams(params)
@@ -74,29 +68,25 @@ export function ReportsPage() {
   }
 
   const ready = dir && data && data.key === key
+  // старая вкладка «Оплата» — теперь долги и авансы в «Кассе»
+  if (params.get('tab') === 'payments') return <Navigate to="/cash?tab=debts" replace />
 
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-xl font-semibold">Отчёты</h2>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Нагрузка педагогов и кабинетов, посещаемость и оплата.
+          Нагрузка педагогов и кабинетов, посещаемость. Деньги — в «Кассе».
         </p>
       </div>
 
       <Segmented<Tab> value={tab} onChange={(t) => update({ tab: t })} options={TABS} />
 
-      {tab !== 'payments' && <PeriodPicker period={period} onChange={(p) => update({ period: p })} />}
+      <PeriodPicker period={period} onChange={(p) => update({ period: p })} />
 
       {(dirError || loadError) && <ErrorNote text={(dirError ?? loadError)!} />}
 
-      {tab === 'payments' ? (
-        dir ? (
-          <PaymentsReport dir={dir} />
-        ) : (
-          <Loading />
-        )
-      ) : !ready ? (
+      {!ready ? (
         <Loading />
       ) : tab === 'load' ? (
         <LoadReport period={period} sessions={data.sessions} dir={dir} />
@@ -106,7 +96,6 @@ export function ReportsPage() {
           sessions={data.sessions}
           bySession={data.bySession}
           dir={dir}
-          onChanged={() => setVersion((v) => v + 1)}
         />
       )}
     </div>

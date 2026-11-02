@@ -22,6 +22,7 @@ const DEFAULT_STUDIO: Studio = {
   close_time: '21:00:00',
   work_days: [0, 1, 2, 3, 4, 5],
   currency: 'EUR',
+  timezone: null,
 }
 
 /**
@@ -55,7 +56,7 @@ export type Directory = {
 export async function loadDirectory(): Promise<{ dir: Directory; error: string | null }> {
   const [studio, holidays, profiles, rooms, students, groups, members, tariffs, rates, overrides] =
     await Promise.all([
-    supabase.from('studios').select('id, name, open_time, close_time, work_days, currency').maybeSingle(),
+    supabase.from('studios').select('id, name, open_time, close_time, work_days, currency, timezone').maybeSingle(),
     supabase.from('holidays').select('id, studio_id, date, name'),
     supabase
       .from('profiles')

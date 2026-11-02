@@ -1,5 +1,6 @@
 import type { Attendance, AttendanceStatus, Student } from '@/lib/types'
-import { came } from '@/lib/attendance'
+import { came, isPaid } from '@/lib/attendance'
+import { money } from '@/lib/tariffs'
 import { Badge } from '@/components/ui'
 import { StudentAvatar } from '@/components/students/StudentAvatar'
 import { CheckIcon, CloseIcon } from '@/components/icons'
@@ -28,38 +29,47 @@ const MARK_LOOK: Record<Mark, string> = {
 }
 
 /**
- * Список детей занятия: у каждого две кнопки — «есть/нет» и «оплачено»,
- * обе в одно касание.
+ * Список детей занятия: у каждого «есть/нет» в одно касание и деньги — сумма
+ * за занятие (оплачено / частично / «Принять») и долг или аванс ребёнка.
+ * balances — null, пока не загружены; педагогу — только его ученики.
  */
 export function AttendanceList({
   roster,
   rows,
+  balances,
+  currency,
   canMarkStatus,
-  canTogglePaid,
+  canAccept,
   onStatus,
-  onPaid,
+  onAccept,
   onAllPresent,
 }: {
   roster: Student[]
   rows: Attendance[]
+  balances: Map<string, number> | null
+  currency: string
   canMarkStatus: boolean
-  canTogglePaid: boolean
+  canAccept: boolean
   onStatus: (studentId: string, status: AttendanceStatus | null) => void
-  onPaid: (studentId: string, paid: boolean) => void
+  onAccept: (student: Student) => void
   onAllPresent: () => void
 }) {
   const rowOf = (id: string) => rows.find((r) => r.student_id === id)
   const unmarked = roster.filter((s) => !rowOf(s.id)?.status).length
-  const paid = roster.filter((s) => rowOf(s.id)?.is_paid).length
+  const charged = rows.filter((r) => r.amount !== null)
+  const paid = charged.filter(isPaid).length
+  const known = charged.length > 0 && charged.every((r) => r.covered !== undefined)
 
   return (
     <section className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-semibold">Посещаемость и оплата</h3>
-          {roster.length > 1 && (
+          {(roster.length > 1 || known) && (
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              отмечено {roster.length - unmarked} из {roster.length} · оплатили {paid}
+              {roster.length > 1 && `отмечено ${roster.length - unmarked} из ${roster.length}`}
+              {roster.length > 1 && known && ' · '}
+              {known && `оплачено ${paid} из ${charged.length}`}
             </p>
           )}
         </div>
@@ -74,9 +84,9 @@ export function AttendanceList({
         )}
       </div>
 
-      {roster.length > 0 && !canMarkStatus && canTogglePaid && (
+      {roster.length > 0 && !canMarkStatus && canAccept && (
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Посещение отмечается в день занятия, а оплату можно отметить заранее.
+          Посещение отмечается в день занятия, а деньги можно принять заранее — они лягут авансом.
         </p>
       )}
 
@@ -90,16 +100,27 @@ export function AttendanceList({
           {roster.map((s) => {
             const row = rowOf(s.id)
             const status = row?.status ?? null
-            // имя и фамилия в две строки — справа место под две кнопки
+            const balance = balances?.get(s.id)
+            const hasBalance = balance !== undefined && balance !== 0
+            // узко: имя, а под ним долг или аванс (если их нет — фамилия)
             const surname = s.first_name ? s.last_name : ''
             return (
               <li key={s.id} className="flex items-center gap-2.5 px-3 py-2.5">
                 <StudentAvatar student={s} size="sm" muted={!s.is_active} />
                 <span className="min-w-0 flex-1 leading-tight">
                   <span className="block truncate font-medium">{s.first_name || s.full_name}</span>
-                  {(surname || !s.is_active) && (
+                  {(hasBalance || surname || !s.is_active) && (
                     <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
-                      {surname}
+                      {!hasBalance && surname}
+                      {hasBalance && (
+                        <span
+                          className={`font-medium ${
+                            balance < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'
+                          }`}
+                        >
+                          {balance < 0 ? `долг ${money(-balance, currency)}` : `аванс ${money(balance, currency)}`}
+                        </span>
+                      )}
                       {!s.is_active && <Badge>архив</Badge>}
                     </span>
                   )}
@@ -110,10 +131,12 @@ export function AttendanceList({
                   name={s.full_name}
                   onClick={() => onStatus(s.id, nextStatus(status))}
                 />
-                <PaidToggle
-                  on={!!row?.is_paid}
-                  disabled={!canTogglePaid}
-                  onClick={() => onPaid(s.id, !row?.is_paid)}
+                <MoneyCell
+                  row={row}
+                  balance={balance}
+                  currency={currency}
+                  canAccept={canAccept}
+                  onClick={() => onAccept(s)}
                 />
               </li>
             )
@@ -154,30 +177,80 @@ function MarkButton({
   )
 }
 
-export function PaidToggle({
-  on,
-  disabled,
+/**
+ * Деньги ребёнка на занятии: «✓ 25 €» — оплачено, «◐ 10 / 25 €» — частично,
+ * «Принять» — не оплачено (или ещё не начислено). Нажатие — принять оплату.
+ */
+function MoneyCell({
+  row,
+  balance,
+  currency,
+  canAccept,
   onClick,
 }: {
-  on: boolean
-  disabled: boolean
+  row: Attendance | undefined
+  balance: number | undefined
+  currency: string
+  canAccept: boolean
   onClick: () => void
 }) {
+  const base =
+    'inline-flex h-10 w-[5.75rem] shrink-0 items-center justify-center gap-1 rounded-xl text-xs font-semibold tabular-nums transition'
+  const amount = row?.amount ?? null
+  const covered = row?.covered
+  let look: { cls: string; text: string; label: string }
+  if (amount !== null && covered !== undefined && covered >= amount) {
+    look = {
+      cls: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300 dark:ring-emerald-800',
+      text: `✓ ${money(amount, currency)}`,
+      label: 'оплачено',
+    }
+  } else if (amount !== null && covered !== undefined && covered > 0) {
+    look = {
+      cls: 'bg-amber-50 text-amber-700 ring-1 ring-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:ring-amber-800',
+      text: `◐ ${covered} / ${money(amount, currency)}`,
+      label: 'оплачено частично',
+    }
+  } else if (amount !== null && covered !== undefined) {
+    look = {
+      cls: 'bg-brand-600 text-white hover:bg-brand-700',
+      text: 'Принять',
+      label: `не оплачено, ${money(amount, currency)}`,
+    }
+  } else if (amount !== null) {
+    // что оплачено, не видно (не свой ученик у педагога) — только сумма
+    look = {
+      cls: 'text-slate-500 ring-1 ring-slate-200 dark:text-slate-400 dark:ring-slate-700',
+      text: money(amount, currency),
+      label: 'начислено',
+    }
+  } else {
+    look = {
+      cls:
+        balance !== undefined && balance < 0
+          ? 'text-brand-700 ring-1 ring-brand-300 hover:bg-brand-50 dark:text-brand-300 dark:ring-brand-800 dark:hover:bg-brand-950/40'
+          : 'text-slate-600 ring-1 ring-slate-300 hover:bg-slate-100 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800',
+      text: 'Принять',
+      label: 'не начислено',
+    }
+  }
+  if (!canAccept) {
+    return look.text === 'Принять' ? (
+      <span className="w-[5.75rem] shrink-0" aria-hidden />
+    ) : (
+      <span className={`${base} ${look.cls}`} aria-label={look.label}>
+        {look.text}
+      </span>
+    )
+  }
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={disabled}
-      aria-pressed={on}
-      aria-label={on ? 'оплачено' : 'не оплачено'}
-      className={`inline-flex h-10 w-[5.75rem] shrink-0 items-center justify-center gap-1 rounded-xl text-xs font-semibold ring-1 transition disabled:opacity-50 ${
-        on
-          ? 'bg-emerald-50 text-emerald-700 ring-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300 dark:ring-emerald-800'
-          : 'text-slate-600 ring-slate-300 hover:bg-slate-100 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800'
-      }`}
+      aria-label={`${look.label}: принять оплату`}
+      className={`${base} ${look.cls}`}
     >
-      {on ? <CheckIcon className="size-3.5" /> : <span aria-hidden>₽</span>}
-      {on ? 'Оплачено' : 'Оплата'}
+      {look.text}
     </button>
   )
 }
