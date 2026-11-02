@@ -10,10 +10,10 @@ export const HORIZON_DAYS = 16 * 7
 // Ученики занятия/серии (кроме группы) приходят вложенным списком —
 // toSession/toSeries разворачивают его в student_ids.
 export const sessionColumns =
-  'id, studio_id, series_id, teacher_id, room_id, group_id, date, occurrence_date, start_time, duration_min, status, note, created_at, session_students(student_id)'
+  'id, studio_id, series_id, teacher_id, room_id, group_id, tariff_id, date, occurrence_date, start_time, duration_min, status, note, created_at, session_students(student_id)'
 
 export const seriesColumns =
-  'id, studio_id, teacher_id, room_id, group_id, weekday, start_time, duration_min, start_date, end_date, is_active, created_at, series_students(student_id)'
+  'id, studio_id, teacher_id, room_id, group_id, tariff_id, weekday, start_time, duration_min, start_date, end_date, is_active, created_at, series_students(student_id)'
 
 type RosterRows = { student_id: string }[] | null | undefined
 

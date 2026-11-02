@@ -4,12 +4,14 @@ import type { Directory } from '@/lib/directory'
 import type { LessonSeries, Session } from '@/lib/types'
 import { formatDayMonth, hhmm } from '@/lib/dates'
 import { candidateDates, horizonFrom, lessonTitle } from '@/lib/schedule'
+import { pickTariff } from '@/lib/tariffs'
 import { useConflictGuard } from '@/lib/useConflictGuard'
 import { Button, ErrorNote, Field, Modal } from '@/components/ui'
 import {
   ConflictNote,
   DurationPicker,
   RoomSelect,
+  TariffField,
   TeacherSelect,
   WeekdayPicker,
 } from '@/components/schedule/fields'
@@ -151,6 +153,19 @@ export function EditSeriesModal({
   const [roomId, setRoomId] = useState(series.room_id ?? '')
   const [teacherId, setTeacherId] = useState(series.teacher_id)
   const [endDate, setEndDate] = useState(series.end_date ?? '')
+  const isGroup = !!series.group_id || series.student_ids.length > 1
+  // тариф серии, выбранный вручную; '' — подставляется по составу и длительности
+  const [tariffId, setTariffId] = useState(() =>
+    series.tariff_id && series.tariff_id !== pickTariff(dir, isGroup, series.duration_min)?.id
+      ? series.tariff_id
+      : '',
+  )
+  const manualTariff = tariffId ? dir.tariffById.get(tariffId) : null
+  const tariffToSave =
+    (manualTariff && manualTariff.kind === (isGroup ? 'group' : 'private')
+      ? manualTariff
+      : pickTariff(dir, isGroup, duration)
+    )?.id ?? null
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -191,6 +206,8 @@ export function EditSeriesModal({
       p_duration: duration,
       p_end: endDate || null,
       p_until: horizonFrom(from),
+      // педагогу база всё равно подберёт тариф сама
+      p_tariff: canChangeTeacher ? tariffToSave : null,
     })
     if (error) {
       setBusy(false)
@@ -229,6 +246,16 @@ export function EditSeriesModal({
         </div>
         <RoomSelect dir={dir} value={roomId} onChange={setRoomId} />
         {canChangeTeacher && <TeacherSelect dir={dir} value={teacherId} onChange={setTeacherId} />}
+        <TariffField
+          dir={dir}
+          isDirector={canChangeTeacher}
+          isGroup={isGroup}
+          duration={duration}
+          teacherId={teacherId}
+          date={from}
+          value={tariffId}
+          onChange={setTariffId}
+        />
         <Field
           label="Последний день (необязательно)"
           type="date"

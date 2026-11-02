@@ -80,6 +80,7 @@ export function LessonDialogs({
     <SessionSheet
       session={session}
       dir={dir}
+      me={me}
       canEdit={canEdit}
       onClose={() => (dirty ? onChanged() : onClose())}
       onChanged={() => onChanged()}

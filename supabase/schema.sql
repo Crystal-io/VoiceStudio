@@ -657,14 +657,21 @@ alter table public.sessions add column if not exists occurrence_date date;
 create unique index if not exists sessions_series_occurrence_uidx
   on public.sessions(series_id, occurrence_date) where series_id is not null;
 
--- Педагог, кабинет и группа занятия должны быть из той же студии
--- (ученики состава проверяются в session_students / series_students).
+-- Педагог, кабинет, группа и тариф (M10) занятия должны быть из той же
+-- студии (ученики состава проверяются в session_students / series_students).
+-- Тариф выбирает директор; у педагога он подставляется сам — функциями
+-- расписания (флаг vs.auto_tariff), свой тариф напрямую педагог не поставит.
+-- Триггеры с tariff_id пересоздаются в разделе M10 — там появляется колонка.
 create or replace function public.check_schedule_refs()
 returns trigger
 language plpgsql
 set search_path = public
 as $$
 begin
+  if auth.uid() is not null and not public.is_director()
+     and coalesce(current_setting('vs.auto_tariff', true), '') <> 'on' then
+    new.tariff_id := case when tg_op = 'UPDATE' then old.tariff_id end;
+  end if;
   if not exists (select 1 from public.profiles
                  where id = new.teacher_id and studio_id = new.studio_id) then
     raise exception 'Педагог не из этой студии';
@@ -676,6 +683,10 @@ begin
   if new.group_id is not null and not exists (
        select 1 from public.groups where id = new.group_id and studio_id = new.studio_id) then
     raise exception 'Группа не из этой студии';
+  end if;
+  if new.tariff_id is not null and not exists (
+       select 1 from public.tariffs where id = new.tariff_id and studio_id = new.studio_id) then
+    raise exception 'Тариф не из этой студии';
   end if;
   return new;
 end;
@@ -707,11 +718,14 @@ declare
   first_day date;
   last_day date;
   created uuid[];
+  prev_auto text := current_setting('vs.auto_tariff', true);
 begin
   select * into s from public.lesson_series where id = p_series;
   if not found or not s.is_active then
     return 0;
   end if;
+  -- тариф занятий — тариф серии (см. check_schedule_refs)
+  perform set_config('vs.auto_tariff', 'on', true);
   -- первое вхождение: ближайший нужный день недели начиная со start_date
   first_day := s.start_date
     + ((s.weekday - (extract(isodow from s.start_date)::int - 1) + 7) % 7);
@@ -719,16 +733,17 @@ begin
 
   with ins as (
     insert into public.sessions (
-      studio_id, series_id, teacher_id, room_id, group_id,
+      studio_id, series_id, teacher_id, room_id, group_id, tariff_id,
       date, occurrence_date, start_time, duration_min
     )
-    select s.studio_id, s.id, s.teacher_id, s.room_id, s.group_id,
+    select s.studio_id, s.id, s.teacher_id, s.room_id, s.group_id, s.tariff_id,
            d::date, d::date, s.start_time, s.duration_min
     from generate_series(first_day::timestamp, last_day::timestamp, interval '7 days') d
     on conflict (series_id, occurrence_date) where series_id is not null do nothing
     returning id
   )
   select coalesce(array_agg(id), '{}') into created from ins;
+  perform set_config('vs.auto_tariff', coalesce(prev_auto, ''), true);
 
   -- отдельной командой: проверка прав на состав должна видеть новые занятия
   insert into public.session_students (session_id, student_id, studio_id)
@@ -773,6 +788,9 @@ $$;
 -- Изменить серию начиная с даты p_from. Будущие занятия серии (без отметок
 -- посещаемости) пересоздаются по новым правилам; прошлые остаются как были.
 -- Возвращает id серии, действующей с p_from (новой, если старая уже шла).
+-- p_tariff (M10) — тариф серии (выбирает директор); пусто — прежний, а если
+-- поменялась длительность — подходящий. У педагога тариф подставляется сам.
+drop function if exists public.update_series(uuid, date, uuid, uuid, int, time, int, date, date);
 create or replace function public.update_series(
   p_series   uuid,
   p_from     date,
@@ -782,7 +800,8 @@ create or replace function public.update_series(
   p_start    time,
   p_duration int,
   p_end      date,
-  p_until    date
+  p_until    date,
+  p_tariff   uuid default null
 )
 returns uuid
 language plpgsql
@@ -791,6 +810,7 @@ as $$
 declare
   s public.lesson_series%rowtype;
   new_id uuid;
+  tariff uuid;
 begin
   select * into s from public.lesson_series where id = p_series;
   if not found then
@@ -799,6 +819,16 @@ begin
   if not (public.is_director() or s.teacher_id = auth.uid()) then
     raise exception 'Нет прав менять эту серию';
   end if;
+  tariff := case
+    when public.is_director() and p_tariff is not null then p_tariff
+    when p_duration <> s.duration_min then coalesce(public.pick_tariff(
+      s.studio_id,
+      s.group_id is not null
+        or (select count(*) from public.series_students x where x.series_id = s.id) > 1,
+      p_duration), s.tariff_id)
+    else s.tariff_id
+  end;
+  perform set_config('vs.auto_tariff', 'on', true);
 
   delete from public.sessions ss
   where ss.series_id = s.id and ss.date >= p_from
@@ -808,17 +838,18 @@ begin
     -- серия ещё не началась — правим на месте
     update public.lesson_series
     set teacher_id = p_teacher, room_id = p_room, weekday = p_weekday,
-        start_time = p_start, duration_min = p_duration, end_date = p_end
+        start_time = p_start, duration_min = p_duration, end_date = p_end,
+        tariff_id = tariff
     where id = s.id;
     new_id := s.id;
   else
     -- старая серия заканчивается накануне, с p_from — новая с тем же составом
     update public.lesson_series set end_date = p_from - 1 where id = s.id;
     insert into public.lesson_series (
-      studio_id, teacher_id, room_id, group_id,
+      studio_id, teacher_id, room_id, group_id, tariff_id,
       weekday, start_time, duration_min, start_date, end_date
     ) values (
-      s.studio_id, p_teacher, p_room, s.group_id,
+      s.studio_id, p_teacher, p_room, s.group_id, tariff,
       p_weekday, p_start, p_duration, p_from, p_end
     )
     returning id into new_id;
@@ -830,6 +861,7 @@ begin
   end if;
 
   perform public.generate_series_sessions(new_id, p_until);
+  perform set_config('vs.auto_tariff', '', true);
   return new_id;
 end;
 $$;
@@ -910,12 +942,12 @@ $$;
 
 revoke all on function public.generate_series_sessions(uuid, date) from public, anon;
 revoke all on function public.ensure_sessions(date) from public, anon;
-revoke all on function public.update_series(uuid, date, uuid, uuid, int, time, int, date, date) from public, anon;
+revoke all on function public.update_series(uuid, date, uuid, uuid, int, time, int, date, date, uuid) from public, anon;
 revoke all on function public.stop_series(uuid, date) from public, anon;
 revoke all on function public.schedule_conflicts(uuid, uuid, date[], time, int, uuid, uuid) from public, anon;
 grant execute on function public.generate_series_sessions(uuid, date) to authenticated;
 grant execute on function public.ensure_sessions(date) to authenticated;
-grant execute on function public.update_series(uuid, date, uuid, uuid, int, time, int, date, date) to authenticated;
+grant execute on function public.update_series(uuid, date, uuid, uuid, int, time, int, date, date, uuid) to authenticated;
 grant execute on function public.stop_series(uuid, date) to authenticated;
 grant execute on function public.schedule_conflicts(uuid, uuid, date[], time, int, uuid, uuid) to authenticated;
 
@@ -990,11 +1022,19 @@ alter table public.sessions add constraint sessions_status_check
 
 -- Перед записью: студия — из занятия, ученик — из той же студии,
 -- кто и когда отметил — текущий пользователь и время.
+-- M10: цену ребёнку (amount) ставит только база — при «Есть» / «опоздание»
+-- по тарифу занятия (см. charge_of), и больше не трогает; без «Есть» цены
+-- нет. Заново считает только пересчёт (vs.recharge, см. sessions_recharge).
+-- SECURITY DEFINER — ставки особых условий педагогу напрямую не видны.
 create or replace function public.attendance_before_write()
 returns trigger
 language plpgsql
+security definer
 set search_path = public
 as $$
+declare
+  recharge boolean := coalesce(current_setting('vs.recharge', true), '') = 'on';
+  c record;
 begin
   new.studio_id := (select studio_id from public.sessions where id = new.session_id);
   if new.studio_id is null then
@@ -1004,8 +1044,30 @@ begin
                  where id = new.student_id and studio_id = new.studio_id) then
     raise exception 'Ученик не из этой студии';
   end if;
-  new.marked_by := auth.uid();
-  new.marked_at := now();
+
+  if new.status in ('present', 'late') then
+    if tg_op = 'UPDATE' and old.status in ('present', 'late') and old.amount is not null
+       and not recharge then
+      new.amount := old.amount;
+      new.tariff_id := old.tariff_id;
+    else
+      c := public.charge_of(new.session_id);
+      new.amount := c.price;
+      new.tariff_id := case when c.price is null then null else c.tariff_id end;
+    end if;
+  else
+    new.amount := null;
+    new.tariff_id := null;
+  end if;
+
+  if recharge and tg_op = 'UPDATE' then
+    -- пересчёт цены — не новая отметка
+    new.marked_by := old.marked_by;
+    new.marked_at := old.marked_at;
+  else
+    new.marked_by := auth.uid();
+    new.marked_at := now();
+  end if;
   return new;
 end;
 $$;
@@ -1217,6 +1279,8 @@ $$;
 
 -- Новое занятие: разовое (p_weekdays пусто) или серии на дни недели.
 -- Состав — группа и/или ученики; хотя бы что-то одно обязательно.
+-- Тариф (M10): выбранный в форме, иначе — подходящий по составу и длительности.
+drop function if exists public.create_lesson(uuid, uuid, uuid, uuid[], date, time, int, int[], date, date);
 create or replace function public.create_lesson(
   p_teacher  uuid,
   p_room     uuid,
@@ -1227,7 +1291,8 @@ create or replace function public.create_lesson(
   p_duration int,
   p_weekdays int[],
   p_end      date,
-  p_until    date
+  p_until    date,
+  p_tariff   uuid default null
 )
 returns void
 language plpgsql
@@ -1236,6 +1301,7 @@ as $$
 declare
   sid uuid := public.current_studio_id();
   extra uuid[] := public.roster_extras(p_group, p_students);
+  tariff uuid;
   wd int;
   new_id uuid;
 begin
@@ -1245,27 +1311,34 @@ begin
   if p_group is null and cardinality(extra) = 0 then
     raise exception 'Выберите группу или хотя бы одного ученика';
   end if;
+  -- свой тариф выбирает директор; педагогу — подходящий
+  tariff := case when public.is_director() and p_tariff is not null then p_tariff
+                 else public.pick_tariff(sid, p_group is not null or cardinality(extra) > 1, p_duration)
+            end;
+  perform set_config('vs.auto_tariff', 'on', true);
 
   if coalesce(cardinality(p_weekdays), 0) = 0 then
-    insert into public.sessions (studio_id, teacher_id, room_id, group_id, date, start_time, duration_min)
-    values (sid, p_teacher, p_room, p_group, p_date, p_start, p_duration)
+    insert into public.sessions (studio_id, teacher_id, room_id, group_id, tariff_id, date, start_time, duration_min)
+    values (sid, p_teacher, p_room, p_group, tariff, p_date, p_start, p_duration)
     returning id into new_id;
     insert into public.session_students (session_id, student_id, studio_id)
     select new_id, x, sid from unnest(extra) x;
+    perform set_config('vs.auto_tariff', '', true);
     return;
   end if;
 
   foreach wd in array p_weekdays loop
     insert into public.lesson_series (
-      studio_id, teacher_id, room_id, group_id, weekday, start_time, duration_min, start_date, end_date
+      studio_id, teacher_id, room_id, group_id, tariff_id, weekday, start_time, duration_min, start_date, end_date
     ) values (
-      sid, p_teacher, p_room, p_group, wd, p_start, p_duration, p_date, p_end
+      sid, p_teacher, p_room, p_group, tariff, wd, p_start, p_duration, p_date, p_end
     )
     returning id into new_id;
     insert into public.series_students (series_id, student_id, studio_id)
     select new_id, x, sid from unnest(extra) x;
     perform public.generate_series_sessions(new_id, p_until);
   end loop;
+  perform set_config('vs.auto_tariff', '', true);
 end;
 $$;
 
@@ -1301,6 +1374,13 @@ begin
     and a.student_id <> all(extra)
     and (p_group is null or not exists (select 1 from public.group_members m
                                         where m.group_id = p_group and m.student_id = a.student_id));
+  -- было частное, стало групповое (или наоборот) — тариф под новый состав (M10)
+  perform set_config('vs.auto_tariff', 'on', true);
+  update public.sessions
+  set tariff_id = public.fit_tariff(s.studio_id, s.tariff_id,
+                                    p_group is not null or cardinality(extra) > 1, s.duration_min)
+  where id = s.id;
+  perform set_config('vs.auto_tariff', '', true);
 end;
 $$;
 
@@ -1348,15 +1428,26 @@ begin
   from public.sessions se cross join unnest(extra) x
   where se.series_id = s.id and se.date >= p_from
   on conflict do nothing;
+  -- тариф под новый состав (M10): у серии и её занятий с этой даты
+  perform set_config('vs.auto_tariff', 'on', true);
+  update public.lesson_series
+  set tariff_id = public.fit_tariff(s.studio_id, s.tariff_id,
+                                    p_group is not null or cardinality(extra) > 1, s.duration_min)
+  where id = s.id;
+  update public.sessions se
+  set tariff_id = public.fit_tariff(se.studio_id, se.tariff_id,
+                                    p_group is not null or cardinality(extra) > 1, se.duration_min)
+  where se.series_id = s.id and se.date >= p_from;
+  perform set_config('vs.auto_tariff', '', true);
 end;
 $$;
 
 revoke all on function public.roster_extras(uuid, uuid[]) from public, anon;
-revoke all on function public.create_lesson(uuid, uuid, uuid, uuid[], date, time, int, int[], date, date) from public, anon;
+revoke all on function public.create_lesson(uuid, uuid, uuid, uuid[], date, time, int, int[], date, date, uuid) from public, anon;
 revoke all on function public.set_session_roster(uuid, uuid, uuid[]) from public, anon;
 revoke all on function public.set_series_roster(uuid, date, uuid, uuid[]) from public, anon;
 grant execute on function public.roster_extras(uuid, uuid[]) to authenticated;
-grant execute on function public.create_lesson(uuid, uuid, uuid, uuid[], date, time, int, int[], date, date) to authenticated;
+grant execute on function public.create_lesson(uuid, uuid, uuid, uuid[], date, time, int, int[], date, date, uuid) to authenticated;
 grant execute on function public.set_session_roster(uuid, uuid, uuid[]) to authenticated;
 grant execute on function public.set_series_roster(uuid, date, uuid, uuid[]) to authenticated;
 
@@ -1701,7 +1792,8 @@ begin
     loop
       if p_mode = 'transfer' then
         perform public.update_series(r.id, p_from, p_to, r.room_id, r.weekday,
-                                     r.start_time, r.duration_min, r.end_date, p_until);
+                                     r.start_time, r.duration_min, r.end_date, p_until,
+                                     r.tariff_id);
       else
         perform public.stop_series(r.id, p_from);
       end if;
@@ -1743,3 +1835,442 @@ $$;
 
 revoke all on function public.disable_member(uuid, text, uuid, date, date, boolean) from public, anon;
 grant execute on function public.disable_member(uuid, text, uuid, date, date, boolean) to authenticated;
+
+-- ============================================================================
+-- M10: касса, часть 1 — валюта, «Прайс и доли», начисления
+--  * тариф — вид занятия (группа / частное) и длительность; ставка (цена с
+--    ребёнка и доля педагога) действует с даты, прежние хранятся историей;
+--    ненужный тариф уходит в архив;
+--  * особые условия педагога: своя цена и/или своя доля (пусто — как у
+--    всех), тоже с даты; сначала особые условия, потом общий тариф;
+--  * у серии и занятия свой тариф — подставляется по составу (группа или
+--    несколько детей — групповой, один — частный) и длительности;
+--  * «Есть» (и «опоздание») начисляет ребёнку цену (attendance.amount), а
+--    педагогу — его долю (teacher_accruals): по ставке на дату занятия, в
+--    момент отметки. «Нет» и снятие отметки начисления снимают. Поменяли
+--    тариф или педагога занятия — его начисления пересчитываются;
+--  * долю педагога видят директор и сам педагог; особые условия — тоже.
+-- ============================================================================
+
+alter table public.studios add column if not exists currency text not null default 'EUR';
+
+create table if not exists public.tariffs (
+  id            uuid primary key default gen_random_uuid(),
+  studio_id     uuid not null references public.studios(id) on delete cascade,
+  kind          text not null check (kind in ('group', 'private')),
+  duration_min  int  not null check (duration_min > 0),
+  name          text,                    -- своё название; пусто — «Группа · 60 мин»
+  is_active     boolean not null default true,
+  created_at    timestamptz not null default now()
+);
+create index if not exists tariffs_studio_idx on public.tariffs(studio_id);
+
+-- Ставка тарифа с даты: цена с ребёнка и доля педагога (студии — остаток).
+create table if not exists public.tariff_rates (
+  id             uuid primary key default gen_random_uuid(),
+  studio_id      uuid not null references public.studios(id) on delete cascade,
+  tariff_id      uuid not null references public.tariffs(id) on delete cascade,
+  valid_from     date not null,
+  price          numeric(10,2) not null check (price >= 0),
+  teacher_share  numeric(10,2) not null check (teacher_share >= 0),
+  created_by     uuid references public.profiles(id) on delete set null,
+  created_at     timestamptz not null default now(),
+  unique (tariff_id, valid_from),
+  check (teacher_share <= price)
+);
+
+-- Особые условия педагога по тарифу с даты. Пустая цена / доля — как у всех;
+-- обе пустые — «снова как у всех» с этой даты.
+create table if not exists public.tariff_overrides (
+  id             uuid primary key default gen_random_uuid(),
+  studio_id      uuid not null references public.studios(id) on delete cascade,
+  tariff_id      uuid not null references public.tariffs(id) on delete cascade,
+  teacher_id     uuid not null references public.profiles(id) on delete cascade,
+  valid_from     date not null,
+  price          numeric(10,2) check (price >= 0),
+  teacher_share  numeric(10,2) check (teacher_share >= 0),
+  created_by     uuid references public.profiles(id) on delete set null,
+  created_at     timestamptz not null default now(),
+  unique (tariff_id, teacher_id, valid_from)
+);
+create index if not exists tariff_overrides_teacher_idx on public.tariff_overrides(teacher_id);
+
+alter table public.lesson_series add column if not exists tariff_id uuid
+  references public.tariffs(id) on delete set null;
+alter table public.sessions add column if not exists tariff_id uuid
+  references public.tariffs(id) on delete set null;
+-- по какому тарифу начислена цена (пусто — не начислена)
+alter table public.attendance add column if not exists tariff_id uuid
+  references public.tariffs(id) on delete set null;
+
+-- Доля педагога за пришедшего ребёнка — отдельно от посещаемости, которую
+-- видят все в студии. Пишет только база (триггер attendance_accrue).
+create table if not exists public.teacher_accruals (
+  session_id  uuid not null,
+  student_id  uuid not null,
+  studio_id   uuid not null references public.studios(id) on delete cascade,
+  teacher_id  uuid not null references public.profiles(id) on delete cascade,
+  tariff_id   uuid references public.tariffs(id) on delete set null,
+  amount      numeric(10,2) not null,
+  special     boolean not null default false,   -- по особым условиям
+  created_at  timestamptz not null default now(),
+  primary key (session_id, student_id),
+  foreign key (session_id, student_id)
+    references public.attendance(session_id, student_id) on delete cascade
+);
+create index if not exists teacher_accruals_teacher_idx on public.teacher_accruals(teacher_id);
+
+alter table public.tariffs          enable row level security;
+alter table public.tariff_rates     enable row level security;
+alter table public.tariff_overrides enable row level security;
+alter table public.teacher_accruals enable row level security;
+
+-- Тарифы и общие ставки видят все в студии (педагогу — для формы занятия);
+-- ведёт директор. Тариф не удаляют — убирают в архив. Удалить можно только
+-- ещё не наступившую ставку («отменить изменение»).
+drop policy if exists tariffs_select on public.tariffs;
+create policy tariffs_select on public.tariffs
+  for select to authenticated using (studio_id = public.current_studio_id());
+drop policy if exists tariffs_insert on public.tariffs;
+create policy tariffs_insert on public.tariffs
+  for insert to authenticated
+  with check (studio_id = public.current_studio_id() and public.is_director());
+drop policy if exists tariffs_update on public.tariffs;
+create policy tariffs_update on public.tariffs
+  for update to authenticated
+  using (studio_id = public.current_studio_id() and public.is_director())
+  with check (studio_id = public.current_studio_id() and public.is_director());
+
+drop policy if exists tariff_rates_select on public.tariff_rates;
+create policy tariff_rates_select on public.tariff_rates
+  for select to authenticated using (studio_id = public.current_studio_id());
+drop policy if exists tariff_rates_insert on public.tariff_rates;
+create policy tariff_rates_insert on public.tariff_rates
+  for insert to authenticated
+  with check (studio_id = public.current_studio_id() and public.is_director());
+drop policy if exists tariff_rates_update on public.tariff_rates;
+create policy tariff_rates_update on public.tariff_rates
+  for update to authenticated
+  using (studio_id = public.current_studio_id() and public.is_director())
+  with check (studio_id = public.current_studio_id() and public.is_director());
+drop policy if exists tariff_rates_delete on public.tariff_rates;
+create policy tariff_rates_delete on public.tariff_rates
+  for delete to authenticated
+  using (studio_id = public.current_studio_id() and public.is_director()
+         and valid_from > current_date);
+
+-- Особые условия: директор — все, педагог — только свои.
+drop policy if exists tariff_overrides_select on public.tariff_overrides;
+create policy tariff_overrides_select on public.tariff_overrides
+  for select to authenticated
+  using (studio_id = public.current_studio_id()
+         and (public.is_director() or teacher_id = auth.uid()));
+drop policy if exists tariff_overrides_insert on public.tariff_overrides;
+create policy tariff_overrides_insert on public.tariff_overrides
+  for insert to authenticated
+  with check (studio_id = public.current_studio_id() and public.is_director());
+drop policy if exists tariff_overrides_update on public.tariff_overrides;
+create policy tariff_overrides_update on public.tariff_overrides
+  for update to authenticated
+  using (studio_id = public.current_studio_id() and public.is_director())
+  with check (studio_id = public.current_studio_id() and public.is_director());
+drop policy if exists tariff_overrides_delete on public.tariff_overrides;
+create policy tariff_overrides_delete on public.tariff_overrides
+  for delete to authenticated
+  using (studio_id = public.current_studio_id() and public.is_director()
+         and valid_from > current_date);
+
+-- Доли педагогов: директор — все, педагог — свои. Пишет только база.
+drop policy if exists teacher_accruals_select on public.teacher_accruals;
+create policy teacher_accruals_select on public.teacher_accruals
+  for select to authenticated
+  using (studio_id = public.current_studio_id()
+         and (public.is_director() or teacher_id = auth.uid()));
+
+-- Тариф: название без лишних пробелов (пустое — без названия).
+create or replace function public.tariffs_before_write()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.name := nullif(btrim(coalesce(new.name, '')), '');
+  if tg_op = 'UPDATE' then
+    new.studio_id := old.studio_id;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists tariffs_before_write on public.tariffs;
+create trigger tariffs_before_write
+  before insert or update on public.tariffs
+  for each row execute function public.tariffs_before_write();
+
+-- Ставка и особые условия: студия — из тарифа, педагог — из той же студии,
+-- автор — кто записал.
+create or replace function public.tariff_terms_before_write()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.studio_id := (select studio_id from public.tariffs where id = new.tariff_id);
+  if new.studio_id is null then
+    raise exception 'Тариф не найден';
+  end if;
+  if tg_table_name = 'tariff_overrides' then
+    if not exists (select 1 from public.profiles
+                   where id = new.teacher_id and studio_id = new.studio_id) then
+      raise exception 'Педагог не из этой студии';
+    end if;
+  end if;
+  new.created_by := auth.uid();
+  new.created_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists tariff_rates_before_write on public.tariff_rates;
+create trigger tariff_rates_before_write
+  before insert or update on public.tariff_rates
+  for each row execute function public.tariff_terms_before_write();
+drop trigger if exists tariff_overrides_before_write on public.tariff_overrides;
+create trigger tariff_overrides_before_write
+  before insert or update on public.tariff_overrides
+  for each row execute function public.tariff_terms_before_write();
+
+-- Подходящий тариф: того же вида, с ближайшей длительностью (из
+-- действующих и с хотя бы одной ставкой). Нет такого — пусто.
+create or replace function public.pick_tariff(p_studio uuid, p_group boolean, p_duration int)
+returns uuid
+language sql
+stable
+set search_path = public
+as $$
+  select t.id from public.tariffs t
+  where t.studio_id = p_studio and t.is_active
+    and t.kind = case when p_group then 'group' else 'private' end
+    and exists (select 1 from public.tariff_rates r where r.tariff_id = t.id)
+  order by abs(t.duration_min - p_duration), t.duration_min desc, t.created_at
+  limit 1;
+$$;
+
+-- Оставить тариф, если он подходит к составу по виду, иначе подобрать.
+create or replace function public.fit_tariff(p_studio uuid, p_current uuid, p_group boolean, p_duration int)
+returns uuid
+language sql
+stable
+set search_path = public
+as $$
+  select case
+    when exists (select 1 from public.tariffs t
+                 where t.id = p_current
+                   and t.kind = case when p_group then 'group' else 'private' end)
+      then p_current
+    else coalesce(public.pick_tariff(p_studio, p_group, p_duration), p_current)
+  end;
+$$;
+
+-- Ставка на дату: особые условия педагога поверх общей ставки тарифа.
+-- Общая — последняя, вступившая в силу к дате (если тариф заведён позже —
+-- самая первая). Доля педагога не больше цены.
+create or replace function public.tariff_rate(p_tariff uuid, p_teacher uuid, p_date date)
+returns table (price numeric, teacher_share numeric, special boolean)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with base as (
+    select r.price, r.teacher_share from public.tariff_rates r
+    where r.tariff_id = p_tariff
+    order by (r.valid_from <= p_date) desc,
+             case when r.valid_from <= p_date then r.valid_from end desc nulls last,
+             r.valid_from
+    limit 1
+  ), ov as (
+    select o.price, o.teacher_share from public.tariff_overrides o
+    where o.tariff_id = p_tariff and o.teacher_id = p_teacher and o.valid_from <= p_date
+    order by o.valid_from desc
+    limit 1
+  )
+  select coalesce(ov.price, base.price),
+         least(coalesce(ov.teacher_share, base.teacher_share), coalesce(ov.price, base.price)),
+         coalesce(ov.price is not null or ov.teacher_share is not null, false)
+  from base left join ov on true;
+$$;
+
+-- Что начислить за ребёнка на занятии: тариф занятия, если он подходит к
+-- составу по виду (иначе — подходящий), цена, доля педагога, педагог.
+create or replace function public.charge_of(
+  p_session uuid,
+  out tariff_id uuid,
+  out price numeric,
+  out teacher_share numeric,
+  out special boolean,
+  out teacher_id uuid
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  s public.sessions%rowtype;
+begin
+  select * into s from public.sessions where id = p_session;
+  if not found then
+    return;
+  end if;
+  teacher_id := s.teacher_id;
+  tariff_id := public.fit_tariff(
+    s.studio_id, s.tariff_id,
+    s.group_id is not null
+      or (select count(*) from public.session_students x where x.session_id = s.id) > 1,
+    s.duration_min);
+  if tariff_id is null then
+    return;
+  end if;
+  select r.price, r.teacher_share, r.special into price, teacher_share, special
+  from public.tariff_rate(tariff_id, s.teacher_id, s.date) r;
+end;
+$$;
+
+revoke all on function public.tariff_rate(uuid, uuid, date) from public, anon, authenticated;
+revoke all on function public.charge_of(uuid) from public, anon, authenticated;
+revoke all on function public.pick_tariff(uuid, boolean, int) from public, anon;
+revoke all on function public.fit_tariff(uuid, uuid, boolean, int) from public, anon;
+grant execute on function public.pick_tariff(uuid, boolean, int) to authenticated;
+grant execute on function public.fit_tariff(uuid, uuid, boolean, int) to authenticated;
+
+-- После записи отметки: доля педагога. Цена у ребёнка появилась (или
+-- пересчитана) — записываем долю; цены нет — доли тоже нет. Уже стоящую
+-- долю повторная запись не трогает (снимок на момент отметки).
+create or replace function public.attendance_accrue()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  c record;
+begin
+  if new.amount is null then
+    delete from public.teacher_accruals
+    where session_id = new.session_id and student_id = new.student_id;
+    return null;
+  end if;
+  if tg_op = 'UPDATE' and old.amount is not null
+     and coalesce(current_setting('vs.recharge', true), '') <> 'on'
+     and exists (select 1 from public.teacher_accruals
+                 where session_id = new.session_id and student_id = new.student_id) then
+    return null;
+  end if;
+  c := public.charge_of(new.session_id);
+  insert into public.teacher_accruals (
+    session_id, student_id, studio_id, teacher_id, tariff_id, amount, special
+  ) values (
+    new.session_id, new.student_id, new.studio_id, c.teacher_id, new.tariff_id,
+    coalesce(c.teacher_share, 0), coalesce(c.special, false)
+  )
+  on conflict (session_id, student_id) do update
+  set teacher_id = excluded.teacher_id, tariff_id = excluded.tariff_id,
+      amount = excluded.amount, special = excluded.special, created_at = now();
+  return null;
+end;
+$$;
+
+drop trigger if exists attendance_accrue on public.attendance;
+create trigger attendance_accrue
+  after insert or update on public.attendance
+  for each row execute function public.attendance_accrue();
+
+-- Пересчитать начисления пришедших на занятиях (цена и доля — заново).
+create or replace function public.recharge_attendance(p_sessions uuid[])
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform set_config('vs.recharge', 'on', true);
+  update public.attendance set status = status
+  where session_id = any(p_sessions) and status in ('present', 'late');
+  perform set_config('vs.recharge', '', true);
+end;
+$$;
+revoke all on function public.recharge_attendance(uuid[]) from public, anon, authenticated;
+
+-- Поменяли тариф или педагога занятия — пересчитать его начисления. Без
+-- «update of …»: тариф меняют и триггеры (check_schedule_refs).
+create or replace function public.sessions_recharge()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.recharge_attendance(array[new.id]);
+  return null;
+end;
+$$;
+
+drop trigger if exists sessions_recharge on public.sessions;
+create trigger sessions_recharge
+  after update on public.sessions
+  for each row
+  when (old.tariff_id is distinct from new.tariff_id or old.teacher_id is distinct from new.teacher_id)
+  execute function public.sessions_recharge();
+
+-- Появилась ставка — серии и занятия без тарифа получают подходящий, а
+-- пришедшие без цены (тарифа не было) — начисления.
+create or replace function public.tariff_rates_after_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  unpriced uuid[];
+begin
+  update public.lesson_series ls
+  set tariff_id = public.pick_tariff(ls.studio_id,
+        ls.group_id is not null
+          or (select count(*) from public.series_students x where x.series_id = ls.id) > 1,
+        ls.duration_min)
+  where ls.studio_id = new.studio_id and ls.tariff_id is null;
+
+  update public.sessions se
+  set tariff_id = public.pick_tariff(se.studio_id,
+        se.group_id is not null
+          or (select count(*) from public.session_students x where x.session_id = se.id) > 1,
+        se.duration_min)
+  where se.studio_id = new.studio_id and se.tariff_id is null;
+
+  select coalesce(array_agg(distinct session_id), '{}') into unpriced
+  from public.attendance
+  where studio_id = new.studio_id and status in ('present', 'late') and amount is null;
+  perform public.recharge_attendance(unpriced);
+  return null;
+end;
+$$;
+
+drop trigger if exists tariff_rates_after_insert on public.tariff_rates;
+create trigger tariff_rates_after_insert
+  after insert on public.tariff_rates
+  for each row execute function public.tariff_rates_after_insert();
+
+-- Проверка тарифа серии и занятия (check_schedule_refs) — теперь и при смене
+-- тарифа: пересоздаём триггеры M3 с колонкой tariff_id.
+drop trigger if exists lesson_series_refs on public.lesson_series;
+create trigger lesson_series_refs
+  before insert or update of studio_id, teacher_id, room_id, group_id, tariff_id
+  on public.lesson_series
+  for each row execute function public.check_schedule_refs();
+
+drop trigger if exists sessions_refs on public.sessions;
+create trigger sessions_refs
+  before insert or update of studio_id, teacher_id, room_id, group_id, tariff_id
+  on public.sessions
+  for each row execute function public.check_schedule_refs();

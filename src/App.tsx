@@ -37,6 +37,7 @@ const ReportsPage = lazyPage(() => import('@/pages/ReportsPage'), (m) => m.Repor
 const StudentsPage = lazyPage(() => import('@/pages/StudentsPage'), (m) => m.StudentsPage)
 const StudioPage = lazyPage(() => import('@/pages/StudioPage'), (m) => m.StudioPage)
 const HoursPage = lazyPage(() => import('@/pages/HoursPage'), (m) => m.HoursPage)
+const CashPage = lazyPage(() => import('@/pages/CashPage'), (m) => m.CashPage)
 const BoardPage = lazyPage(() => import('@/pages/BoardPage'), (m) => m.BoardPage)
 
 function Splash() {
@@ -155,6 +156,14 @@ function AppRoutes() {
             element={
               <DirectorOnly>
                 <StudioPage />
+              </DirectorOnly>
+            }
+          />
+          <Route
+            path="cash"
+            element={
+              <DirectorOnly>
+                <CashPage />
               </DirectorOnly>
             }
           />

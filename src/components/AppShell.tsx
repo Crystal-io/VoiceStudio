@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { useProfile } from '@/lib/profile'
-import { BuildingIcon, CalendarIcon, HomeIcon, MusicIcon } from '@/components/icons'
+import { BuildingIcon, CalendarIcon, HomeIcon, MusicIcon, WalletIcon } from '@/components/icons'
 import { Suspense, type ComponentType, type SVGProps } from 'react'
 import { Spinner } from '@/components/ui'
 
@@ -16,6 +16,7 @@ const directorNav: NavItem[] = [
   { to: '/schedule', label: 'Расписание', icon: CalendarIcon },
   // ученики, группы, педагоги и кабинеты — табы «Студии»
   { to: '/studio', label: 'Студия', icon: BuildingIcon },
+  { to: '/cash', label: 'Касса', icon: WalletIcon },
 ]
 
 const teacherNav: NavItem[] = [

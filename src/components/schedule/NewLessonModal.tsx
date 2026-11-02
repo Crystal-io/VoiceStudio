@@ -5,12 +5,14 @@ import type { Profile } from '@/lib/types'
 import { weekdayOf } from '@/lib/dates'
 import { groupMemberIds } from '@/lib/attendance'
 import { candidateDates, horizonFrom } from '@/lib/schedule'
+import { pickTariff } from '@/lib/tariffs'
 import { useConflictGuard } from '@/lib/useConflictGuard'
 import { Button, ErrorNote, Field, Modal, Segmented } from '@/components/ui'
 import {
   ConflictNote,
   DurationPicker,
   RoomSelect,
+  TariffField,
   TeacherSelect,
   WeekdayPicker,
 } from '@/components/schedule/fields'
@@ -65,6 +67,8 @@ export function NewLessonModal({
   const [endDate, setEndDate] = useState('')
   const [start, setStart] = useState(defaultStart ?? '15:00')
   const [duration, setDuration] = useState(45)
+  // '' — тариф подставится сам по составу и длительности
+  const [tariffId, setTariffId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -72,6 +76,15 @@ export function NewLessonModal({
   const members = groupMemberIds(groupId || null, dir)
   // кто и так в группе, отдельно не записываем
   const extras = [...picked].filter((id) => !members.includes(id))
+  const isGroup = !!groupId || extras.length > 1
+  // директор передаёт тариф явно (выбранный или подобранный), педагогу база подберёт сама
+  const manualTariff = tariffId ? dir.tariffById.get(tariffId) : null
+  const tariffToSave = isDirector
+    ? (manualTariff && manualTariff.kind === (isGroup ? 'group' : 'private')
+        ? manualTariff
+        : pickTariff(dir, isGroup, duration)
+      )?.id ?? null
+    : null
 
   const query =
     teacherId && date && start && duration > 0
@@ -131,6 +144,7 @@ export function NewLessonModal({
       p_weekdays: repeat === 'weekly' ? weekdays : null,
       p_end: repeat === 'weekly' ? endDate || null : null,
       p_until: horizonFrom(date),
+      p_tariff: tariffToSave,
     })
     if (error) {
       setBusy(false)
@@ -250,6 +264,16 @@ export function NewLessonModal({
 
         <RoomSelect dir={dir} value={roomId} onChange={setRoomId} />
         {isDirector && <TeacherSelect dir={dir} value={teacherId} onChange={setTeacherId} />}
+        <TariffField
+          dir={dir}
+          isDirector={isDirector}
+          isGroup={isGroup}
+          duration={duration}
+          teacherId={teacherId}
+          date={date}
+          value={tariffId}
+          onChange={setTariffId}
+        />
 
         {guard.conflicts && <ConflictNote conflicts={guard.conflicts} />}
         {error && <ErrorNote text={error} />}

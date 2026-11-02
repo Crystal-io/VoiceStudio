@@ -80,6 +80,8 @@ export type LessonSeries = {
   teacher_id: string
   room_id: string | null
   group_id: string | null
+  /** тариф серии (пусто — подберётся при отметке) */
+  tariff_id: string | null
   /** ученики серии, кроме группы */
   student_ids: string[]
   weekday: number
@@ -102,6 +104,8 @@ export type Session = {
   teacher_id: string
   room_id: string | null
   group_id: string | null
+  /** тариф занятия (пусто — подберётся при отметке) */
+  tariff_id: string | null
   /** ученики занятия, кроме группы */
   student_ids: string[]
   date: string
@@ -131,6 +135,41 @@ export type Studio = {
   open_time: string
   close_time: string
   work_days: number[]
+  /** валюта касс — код ISO, «EUR» */
+  currency: string
+}
+
+export type TariffKind = 'group' | 'private'
+
+/** Тариф — вид занятия и длительность; цены — в ставках с датой. */
+export type Tariff = {
+  id: string
+  studio_id: string
+  kind: TariffKind
+  duration_min: number
+  /** своё название; пусто — «Группа · 60 мин» */
+  name: string | null
+  is_active: boolean
+  created_at: string
+}
+
+/** Ставка тарифа с даты: цена с ребёнка и доля педагога (студии — остаток). */
+export type TariffRate = {
+  id: string
+  tariff_id: string
+  valid_from: string
+  price: number
+  teacher_share: number
+}
+
+/** Особые условия педагога по тарифу с даты; пусто — как у всех. */
+export type TariffOverride = {
+  id: string
+  tariff_id: string
+  teacher_id: string
+  valid_from: string
+  price: number | null
+  teacher_share: number | null
 }
 
 /**

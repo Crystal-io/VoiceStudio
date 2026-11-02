@@ -151,3 +151,9 @@ export function formatMonth(iso: string): string {
   const name = monthName.format(fromISO(iso))
   return `${name.charAt(0).toUpperCase()}${name.slice(1)} ${iso.slice(0, 4)}`
 }
+
+/** «01.09» (другого года — «01.09.25») — в строках с суммами, где мало места. */
+export function formatDayNum(iso: string): string {
+  const [y, m, d] = iso.slice(0, 10).split('-')
+  return Number(y) === new Date().getFullYear() ? `${d}.${m}` : `${d}.${m}.${y.slice(2)}`
+}

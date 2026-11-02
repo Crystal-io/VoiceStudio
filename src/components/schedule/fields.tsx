@@ -2,6 +2,7 @@ import type { Directory } from '@/lib/directory'
 import type { Conflict } from '@/lib/schedule'
 import { formatDayShort, WEEKDAYS_SHORT } from '@/lib/dates'
 import { plural } from '@/lib/format'
+import { money, pickTariff, rateFor, tariffTitle } from '@/lib/tariffs'
 import { SelectField } from '@/components/ui'
 import { AlertIcon } from '@/components/icons'
 
@@ -181,6 +182,80 @@ export function ConflictNote({ conflicts }: { conflicts: Conflict[] }) {
       <p className="mt-3 text-xs text-amber-800 dark:text-amber-200/80">
         Поменяйте время, день или кабинет — или сохраните всё равно.
       </p>
+    </div>
+  )
+}
+
+/**
+ * Тариф занятия. Подставляется сам по составу и длительности; директор может
+ * выбрать другой того же вида (value — выбранный вручную, '' — сам). Педагог
+ * видит, какой подставится, — выбирает тариф директор.
+ */
+export function TariffField({
+  dir,
+  isDirector,
+  isGroup,
+  duration,
+  teacherId,
+  date,
+  value,
+  onChange,
+}: {
+  dir: Directory
+  isDirector: boolean
+  isGroup: boolean
+  duration: number
+  teacherId: string
+  date: string
+  value: string
+  onChange: (id: string) => void
+}) {
+  const kind = isGroup ? 'group' : 'private'
+  const auto = pickTariff(dir, isGroup, duration)
+  const manual = value ? dir.tariffById.get(value) : null
+  const chosen = manual && manual.kind === kind ? manual : auto
+  const rate = chosen ? rateFor(dir, chosen.id, teacherId || null, date) : null
+  const currency = dir.studio.currency
+  const hint = rate
+    ? `${money(rate.price, currency)} ${isGroup ? 'с каждого пришедшего' : 'за занятие'}${
+        teacherId ? ` · педагогу ${money(rate.teacherShare, currency)}` : ''
+      }${rate.special ? ' (особые условия)' : ''}`
+    : dir.tariffs.length === 0
+      ? isDirector
+        ? 'Тарифов пока нет — заведите их в «Касса» → «Прайс и доли».'
+        : 'Тарифы заводит директор.'
+      : `Нет ${isGroup ? 'группового' : 'частного'} тарифа — «Есть» начислится, когда он появится.`
+
+  if (!isDirector) {
+    return (
+      <div>
+        <FieldLabel>Тариф</FieldLabel>
+        <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm dark:bg-slate-800/50">
+          <span className="font-medium">{chosen ? tariffTitle(chosen) : 'Подберётся сам'}</span>
+          <span className="block text-xs text-slate-500 dark:text-slate-400">{hint}</span>
+        </p>
+      </div>
+    )
+  }
+
+  const options = dir.tariffs.filter((t) => t.kind === kind && (t.is_active || t.id === manual?.id))
+  return (
+    <div>
+      <SelectField
+        label="Тариф"
+        value={manual && manual.kind === kind ? manual.id : ''}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">{auto ? `${tariffTitle(auto)} — по составу` : 'Подберётся сам'}</option>
+        {options
+          .filter((t) => t.id !== auto?.id)
+          .map((t) => (
+            <option key={t.id} value={t.id}>
+              {tariffTitle(t)}
+            </option>
+          ))}
+      </SelectField>
+      <span className="mt-1.5 block text-xs leading-relaxed text-slate-500 dark:text-slate-400">{hint}</span>
     </div>
   )
 }

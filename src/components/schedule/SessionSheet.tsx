@@ -1,14 +1,15 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Directory } from '@/lib/directory'
-import type { Attendance, AttendanceStatus, LessonSeries, Session } from '@/lib/types'
+import type { Attendance, AttendanceStatus, LessonSeries, Profile, Session } from '@/lib/types'
 import { formatDayMonth, timeRange, todayISO, weekdayOf, WEEKDAYS_EVERY, WEEKDAYS_SHORT } from '@/lib/dates'
 import { attendanceColumns, nobodyCame, rosterOf } from '@/lib/attendance'
 import { lessonTitle, seriesColumns, teacherColor, toSeries } from '@/lib/schedule'
+import { lessonTariff, money, rateFor, tariffTitle } from '@/lib/tariffs'
 import { Button, ErrorNote, Modal, Spinner } from '@/components/ui'
 import { AttendanceList } from '@/components/schedule/AttendanceList'
 import { ParentContact } from '@/components/students/StudentCard'
-import { CalendarIcon, ClockIcon, DoorIcon, RepeatIcon } from '@/components/icons'
+import { CalendarIcon, ChevronDownIcon, ClockIcon, DoorIcon, RepeatIcon, WalletIcon } from '@/components/icons'
 
 type Confirm = 'delete' | 'stop' | null
 
@@ -16,6 +17,7 @@ type Confirm = 'delete' | 'stop' | null
 export function SessionSheet({
   session,
   dir,
+  me,
   canEdit,
   onClose,
   onChanged,
@@ -26,6 +28,7 @@ export function SessionSheet({
 }: {
   session: Session
   dir: Directory
+  me: Profile
   canEdit: boolean
   onClose: () => void
   /** занятие изменилось или удалено — перечитать список */
@@ -216,6 +219,14 @@ export function SessionSheet({
             {!session.series_id ? 'Разовое' : series ? seriesText(series) : 'Повторяется'}
           </InfoRow>
         </ul>
+        {!cancelled && (
+          <TariffLine
+            session={session}
+            dir={dir}
+            canChange={me.role === 'director'}
+            onChanged={onAttendanceChanged}
+          />
+        )}
         {solo && (solo.parent_name || solo.parent_phone) && <ParentContact student={solo} />}
 
         {!cancelled &&
@@ -318,6 +329,86 @@ export function SessionSheet({
         )}
       </div>
     </Modal>
+  )
+}
+
+/**
+ * Тариф и цена занятия. Директор может поставить другой тариф того же вида —
+ * начисления пришедших пересчитаются сами.
+ */
+function TariffLine({
+  session,
+  dir,
+  canChange,
+  onChanged,
+}: {
+  session: Session
+  dir: Directory
+  canChange: boolean
+  onChanged: () => void
+}) {
+  const [tariffId, setTariffId] = useState(session.tariff_id)
+  const [error, setError] = useState<string | null>(null)
+  const isGroup = !!session.group_id || session.student_ids.length > 1
+  const tariff = lessonTariff(dir, tariffId, isGroup, session.duration_min)
+  const rate = tariff ? rateFor(dir, tariff.id, session.teacher_id, session.date) : null
+  const currency = dir.studio.currency
+  const options = dir.tariffs.filter(
+    (t) => t.kind === (isGroup ? 'group' : 'private') && (t.is_active || t.id === tariff?.id),
+  )
+
+  async function change(id: string) {
+    const prev = tariffId
+    setTariffId(id)
+    setError(null)
+    const { error } = await supabase.from('sessions').update({ tariff_id: id }).eq('id', session.id)
+    if (error) {
+      setTariffId(prev)
+      setError(error.message)
+      return
+    }
+    onChanged()
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-start gap-2 text-sm">
+        <span className="flex h-5 w-4 shrink-0 items-center justify-center text-slate-400">
+          <WalletIcon className="size-4" />
+        </span>
+        <span className="min-w-0 flex-1 text-slate-700 dark:text-slate-200">
+          {canChange && options.length > 1 ? (
+            // список невидим поверх названия: нажали на тариф — выбор другого
+            <span className="relative inline-flex max-w-full items-center gap-1 font-medium text-brand-600 dark:text-brand-400">
+              <span className="truncate">{tariff ? tariffTitle(tariff) : 'Тарифа нет'}</span>
+              <ChevronDownIcon className="size-4 shrink-0" />
+              <select
+                value={tariff?.id ?? ''}
+                onChange={(e) => void change(e.target.value)}
+                aria-label="Тариф занятия"
+                className="absolute inset-0 cursor-pointer opacity-0"
+              >
+                {options.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {tariffTitle(t)}
+                  </option>
+                ))}
+              </select>
+            </span>
+          ) : tariff ? (
+            tariffTitle(tariff)
+          ) : (
+            'Тарифа нет'
+          )}
+          <span className="block text-xs text-slate-500 dark:text-slate-400">
+            {rate
+              ? `${money(rate.price, currency)} ${isGroup ? 'с каждого пришедшего' : 'за занятие'}${rate.special ? ' · особые условия педагога' : ''}`
+              : '«Есть» начислится, когда появится подходящий тариф'}
+          </span>
+        </span>
+      </div>
+      {error && <ErrorNote text={error} />}
+    </div>
   )
 }
 
